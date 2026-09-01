@@ -7,11 +7,13 @@ import { useCallback, useEffect, useState } from "react";
 export function useElectronUpdater() {
   const [isElectron, setIsElectron] = useState(false);
   const [status, setStatus] = useState({ state: "idle" });
+  const [version, setVersion] = useState(null);
 
   useEffect(() => {
     if (!window.electronAPI) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsElectron(true);
+    window.electronAPI.getAppVersion().then(setVersion);
     return window.electronAPI.onUpdateStatus(setStatus);
   }, []);
 
@@ -30,5 +32,5 @@ export function useElectronUpdater() {
     window.electronAPI?.quitAndInstall();
   }, []);
 
-  return { isElectron, status, checkForUpdates, quitAndInstall };
+  return { isElectron, status, version, checkForUpdates, quitAndInstall };
 }

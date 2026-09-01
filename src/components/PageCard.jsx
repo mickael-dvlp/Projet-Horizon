@@ -119,7 +119,7 @@ export default function PageCard({
                 e.stopPropagation();
                 setShowOptions(!showOptions);
               }}
-              aria-label="Options du chapitre"
+              aria-label={`Options du chapitre ${title}`}
               className="p-0.5 opacity-0 group-hover:opacity-100 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-400 dark:text-slate-500 transition-all"
             >
               <MoreHorizontal size={15} />

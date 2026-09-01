@@ -49,6 +49,9 @@ test.describe("Parcours de création complet", () => {
     await page.keyboard.press("Enter");
 
     await page.getByText("Nouvel arc").click();
+    // Le nouvel arc entre immédiatement en mode renommage (voir Column.jsx) ;
+    // Échap referme ce mode et conserve le nom par défaut "Nouvel arc".
+    await page.keyboard.press("Escape");
     await expect(page.getByText("2 arc", { exact: false })).toBeVisible();
 
     const sourceColumn = page.locator("div", { has: page.getByRole("heading", { name: "Arc 1" }) }).first();

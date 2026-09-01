@@ -240,6 +240,11 @@ export default function SettingsModal({
             <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
               Application
             </h3>
+            {updater.version && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                Version installée : <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">{updater.version}</span>
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={updater.checkForUpdates}

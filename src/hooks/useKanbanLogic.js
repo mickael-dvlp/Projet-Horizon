@@ -273,7 +273,12 @@ export function useKanbanLogic() {
   };
 
   useEffect(() => {
-    if (!mounted || isInitialLoad || projects.length === 0) return;
+    // `projects.length === 0` seul ne suffit plus à ignorer la sauvegarde :
+    // supprimer le dernier univers actif vide `projects` tout en peuplant la
+    // corbeille — sans cette exception, cette suppression (et tout ce qui la
+    // suit) ne serait jamais persistée, et un rechargement la ferait
+    // disparaître de la corbeille comme si elle n'avait jamais eu lieu.
+    if (!mounted || isInitialLoad || (projects.length === 0 && trashItems.length === 0)) return;
 
     const dataToSave = {
       projects,
@@ -423,8 +428,30 @@ export function useKanbanLogic() {
     );
   };
 
+  // Un univers n'embarque pas ses livres/arcs/chapitres "en ligne" (ils
+  // vivent dans des maps séparées indexées par id) — contrairement à
+  // deleteColumn/deletePage, il faut donc construire ici un instantané
+  // autonome avant de le passer à moveToTrash, pour que la restauration
+  // dispose de toute la hiérarchie. Pas de window.confirm ici : Sidebar.jsx
+  // confirme déjà en amont, un second confirm ferait doublon.
   const deleteProject = (projectId) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
     const subs = subProjects[projectId] || [];
+    const projectData = Object.fromEntries(
+      subs.map((sub) => [sub.id, allProjectsData[sub.id] || []])
+    );
+    moveToTrash(
+      {
+        ...project,
+        subProjects: subs,
+        allProjectsData: projectData,
+        knowledgeBaseByProject: knowledgeBaseByProject[projectId] || [],
+      },
+      "project",
+      {}
+    );
+
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setSubProjects((prev) => {
       const next = { ...prev };
@@ -500,7 +527,18 @@ export function useKanbanLogic() {
     }));
   };
 
+  // Même raison qu'au-dessus pour deleteProject : un livre n'embarque pas ses
+  // arcs/chapitres en ligne, il faut les rattacher explicitement avant
+  // moveToTrash. Pas de window.confirm ici non plus (déjà fait dans Sidebar.jsx).
   const deleteSubProject = (projectId, subProjectId) => {
+    const book = (subProjects[projectId] || []).find((sp) => sp.id === subProjectId);
+    if (!book) return;
+    moveToTrash(
+      { ...book, allProjectsData: allProjectsData[subProjectId] || [] },
+      "subProject",
+      { projectId }
+    );
+
     const remaining = (subProjects[projectId] || []).filter(
       (sp) => sp.id !== subProjectId
     );
@@ -527,11 +565,14 @@ export function useKanbanLogic() {
     });
   };
 
-  const addColumn = () =>
-    setColumns([
-      ...columns,
-      { id: `col-${Date.now()}`, title: "Nouvel arc", color: "slate", pages: [] },
-    ]);
+  // Retourne l'id créé : KanbanBoard s'en sert pour faire entrer le nouvel
+  // arc immédiatement en mode renommage, plutôt que de laisser "Nouvel arc"
+  // tel quel sans étape de nommage (incohérent avec chapitres/scènes/tâches).
+  const addColumn = () => {
+    const newColumn = { id: `col-${Date.now()}`, title: "Nouvel arc", color: "slate", pages: [] };
+    setColumns([...columns, newColumn]);
+    return newColumn.id;
+  };
 
   const deleteColumn = (columnId) => {
     const col = columns.find((c) => c.id === columnId);
@@ -734,6 +775,43 @@ export function useKanbanLogic() {
           ...prev,
           [targetProjectId]: [...(prev[targetProjectId] || []), clean],
         }));
+      }
+      removeFromTrash(trashId);
+      return;
+    }
+
+    // Univers entier : ré-éclate l'instantané autonome dans les mêmes maps
+    // que celles vidées par deleteProject. Collision d'id quasi impossible
+    // avec des ids Date.now(), mais gardée par prudence — seul l'id racine
+    // est régénéré, les ids des livres/arcs/chapitres qu'il référence restent
+    // inchangés (déjà namespacés dans leurs propres maps).
+    if (originalType === "project") {
+      const restoredId = projects.some((p) => p.id === clean.id)
+        ? `proj-${Date.now()}`
+        : clean.id;
+      setProjects((prev) => [...prev, { id: restoredId, name: clean.name }]);
+      setSubProjects((prev) => ({ ...prev, [restoredId]: clean.subProjects || [] }));
+      setAllProjectsData((prev) => ({ ...prev, ...(clean.allProjectsData || {}) }));
+      setKnowledgeBaseByProject((prev) => ({
+        ...prev,
+        [restoredId]: clean.knowledgeBaseByProject || [],
+      }));
+      removeFromTrash(trashId);
+      return;
+    }
+
+    // Livre : reprend l'univers d'origine s'il existe encore, sinon retombe
+    // sur l'univers actif — même repli que pour un arc/chapitre plus bas.
+    if (originalType === "subProject") {
+      const targetProjectId =
+        projectId && projects.some((p) => p.id === projectId) ? projectId : activeProjectId;
+      if (targetProjectId) {
+        const { allProjectsData: bookColumns, ...bookOnly } = clean;
+        setSubProjects((prev) => ({
+          ...prev,
+          [targetProjectId]: [...(prev[targetProjectId] || []), bookOnly],
+        }));
+        setAllProjectsData((prev) => ({ ...prev, [bookOnly.id]: bookColumns || [] }));
       }
       removeFromTrash(trashId);
       return;

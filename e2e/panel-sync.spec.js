@@ -93,4 +93,30 @@ test.describe("Synchronisation des panneaux Tâches/Scènes", () => {
     await expect(scenesButton).toHaveAttribute("aria-expanded", "false");
     await expect(page.locator("#memo-scenes-panel")).not.toBeVisible();
   });
+
+  test("ouvrir Tâches ferme Scènes et inversement (exclusion mutuelle)", async ({ page }) => {
+    await loginAsGuest(page);
+    await createUniverse(page, "UniversPanelSyncExclusive");
+
+    await page.getByText("Ajouter un chapitre").click();
+    await page.getByPlaceholder("Nom du chapitre...").fill("Chapitre exclusif");
+    await page.keyboard.press("Enter");
+    await page.getByText("Chapitre exclusif", { exact: true }).click();
+
+    const tasksButton = page.getByTitle("Tâches");
+    const scenesButton = page.getByTitle("Scènes");
+
+    await scenesButton.click();
+    await expect(scenesButton).toHaveAttribute("aria-expanded", "true");
+
+    await tasksButton.click();
+    await expect(tasksButton).toHaveAttribute("aria-expanded", "true");
+    await expect(scenesButton).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#memo-scenes-panel")).not.toBeVisible();
+
+    await scenesButton.click();
+    await expect(scenesButton).toHaveAttribute("aria-expanded", "true");
+    await expect(tasksButton).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#memo-tasks-panel")).not.toBeVisible();
+  });
 });

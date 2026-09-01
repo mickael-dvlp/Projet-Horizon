@@ -19,7 +19,7 @@ function ProgressBar({ percent }) {
   );
 }
 
-function SectionCard({ icon: Icon, title, items, emptyText, renderItem, onOpenItem }) {
+function SectionCard({ icon: Icon, title, items, emptyText, renderItem, onOpenItem, isTaskSection = false }) {
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -36,7 +36,7 @@ function SectionCard({ icon: Icon, title, items, emptyText, renderItem, onOpenIt
           {items.slice(0, 30).map((item, i) => (
             <button
               key={i}
-              onClick={() => onOpenItem(item)}
+              onClick={() => onOpenItem(item, isTaskSection)}
               className="flex items-center gap-2 text-left px-1.5 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
               {renderItem(item)}
@@ -125,6 +125,7 @@ export default function Dashboard({ project, activeSubProjectId, summary, onOpen
                 items={undoneTasks}
                 emptyText="Aucune tâche en attente."
                 onOpenItem={onOpenItem}
+                isTaskSection
                 renderItem={(t) => (
                   <>
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 shrink-0" />

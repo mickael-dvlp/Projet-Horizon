@@ -27,6 +27,8 @@ export default function Column({
   onSetPageStatus,
   onSetPagePriority,
   onSetPageDeadline,
+  autoEdit = false,
+  onAutoEditHandled,
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -74,6 +76,14 @@ export default function Column({
   }, [isEditing]);
 
   useEffect(() => {
+    if (autoEdit) {
+      setIsEditing(true);
+      onAutoEditHandled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEdit]);
+
+  useEffect(() => {
     if (isAddingPage) newPageRef.current?.focus();
   }, [isAddingPage]);
 
@@ -102,8 +112,16 @@ export default function Column({
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
                 onBlur={handleSave}
-                onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSave();
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setEditValue(title);
+                    setIsEditing(false);
+                  }
+                }}
                 onClick={(e) => e.stopPropagation()}
+                aria-label={`Nouveau nom de l’arc ${title}`}
                 className="font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-500/50 rounded-md px-2 py-0.5 outline-none w-full text-sm shadow-sm"
               />
             ) : (
@@ -125,7 +143,7 @@ export default function Column({
               e.stopPropagation();
               setIsMenuOpen(!isMenuOpen);
             }}
-            aria-label="Options de l'arc"
+            aria-label={`Options de l’arc ${title}`}
             className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors ml-1 shrink-0"
           >
             <MoreHorizontal size={16} />

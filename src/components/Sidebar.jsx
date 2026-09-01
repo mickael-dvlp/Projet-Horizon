@@ -265,6 +265,7 @@ export default function Sidebar({
           <button
             ref={newProjectTriggerRef}
             onClick={() => setIsCreatingProject(true)}
+            aria-label="Créer un nouvel univers"
             className="p-1 text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-md transition-colors"
             title="Nouvel univers"
           >
@@ -316,6 +317,7 @@ export default function Sidebar({
                     {/* Le nom sélectionne l'univers (dernier livre actif ou premier livre). */}
                     <button
                       onClick={() => selectProject(project.id)}
+                      title={project.name}
                       className={`flex-1 min-w-0 text-left py-1.5 pr-20 text-sm font-semibold truncate ${
                         isActiveProject
                           ? "text-indigo-700 dark:text-indigo-400"
@@ -333,6 +335,7 @@ export default function Sidebar({
                         }}
                         className="p-1 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                         title="Ajouter un livre"
+                        aria-label={`Ajouter un livre dans ${project.name}`}
                       >
                         <Plus size={11} />
                       </button>
@@ -343,6 +346,7 @@ export default function Sidebar({
                         }}
                         className="p-1 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                         title="Renommer"
+                        aria-label={`Renommer l’univers ${project.name}`}
                       >
                         <Settings size={11} />
                       </button>
@@ -355,6 +359,7 @@ export default function Sidebar({
                         }}
                         className="p-1 hover:bg-red-50 dark:hover:bg-red-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors"
                         title="Supprimer"
+                        aria-label={`Supprimer l’univers ${project.name}`}
                       >
                         <Trash2 size={11} />
                       </button>
@@ -402,7 +407,7 @@ export default function Sidebar({
                                 className={`shrink-0 ${isActive ? "text-indigo-500 dark:text-indigo-400" : "text-slate-400 dark:text-slate-500"}`}
                               />
                               <StatusDot status={sub.status} />
-                              <span className="truncate pr-16">{sub.name}</span>
+                              <span className="truncate pr-16" title={sub.name}>{sub.name}</span>
                             </button>
                           )}
                           {editingSubProject?.id !== sub.id && (
@@ -414,6 +419,7 @@ export default function Sidebar({
                                 }}
                                 className="p-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                                 title="Statut"
+                                aria-label={`Modifier le statut du livre ${sub.name}`}
                               >
                                 <Flag size={11} />
                               </button>
@@ -428,6 +434,7 @@ export default function Sidebar({
                                 }}
                                 className="p-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                                 title="Renommer"
+                                aria-label={`Renommer le livre ${sub.name}`}
                               >
                                 <Settings size={11} />
                               </button>
@@ -440,6 +447,7 @@ export default function Sidebar({
                                 }}
                                 className="p-0.5 hover:bg-red-50 dark:hover:bg-red-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors"
                                 title="Supprimer"
+                                aria-label={`Supprimer le livre ${sub.name}`}
                               >
                                 <Trash2 size={11} />
                               </button>
@@ -612,7 +620,7 @@ export default function Sidebar({
                       >
                         <span className="flex items-center gap-2 w-full min-w-0 text-sm font-medium">
                           <FileText size={12} className="shrink-0 text-slate-400 dark:text-slate-500" />
-                          <span className="truncate">{file.name}</span>
+                          <span className="truncate" title={file.name}>{file.name}</span>
                         </span>
                         {snippet && (
                           <span className="pl-5 text-[11px] text-slate-400 dark:text-slate-500 truncate w-full">
@@ -652,7 +660,7 @@ export default function Sidebar({
                             size={12}
                             className={`shrink-0 ${isActive ? "text-indigo-500 dark:text-indigo-400" : "text-slate-400 dark:text-slate-500"}`}
                           />
-                          <span className="truncate pr-14">{file.name}</span>
+                          <span className="truncate pr-14" title={file.name}>{file.name}</span>
                         </button>
                         <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                           <button
@@ -662,6 +670,7 @@ export default function Sidebar({
                             }}
                             className="p-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                             title={scope.length === 0 ? "Portée : tout l'univers" : "Portée : livres spécifiques"}
+                            aria-label={`Modifier la portée de la fiche ${file.name}`}
                           >
                             <Target size={11} />
                           </button>
@@ -672,6 +681,7 @@ export default function Sidebar({
                             }}
                             className="p-0.5 hover:bg-red-50 dark:hover:bg-red-500/10 rounded text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors"
                             title="Supprimer"
+                            aria-label={`Supprimer la fiche ${file.name}`}
                           >
                             <Trash2 size={11} />
                           </button>

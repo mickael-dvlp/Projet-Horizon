@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const http = require("http");
@@ -73,8 +73,16 @@ function startStaticServer(rootDir, port) {
 
 let server;
 let mainWindow;
+// Confirmation avant fermeture (protection anti-clic malencontreux sur la
+// croix — couvre aussi Alt+F4, qui déclenche le même évènement "close").
+// Affichée par le renderer lui-même (modale Tailwind cohérente avec le
+// reste de l'app) plutôt qu'une boîte système, via un aller-retour IPC :
+// le processus principal bloque la fermeture, demande confirmation à la
+// page, et n'autorise réellement la fermeture qu'à sa réponse.
+let closeConfirmed = false;
 
 async function createWindow(url) {
+  closeConfirmed = false;
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -90,31 +98,21 @@ async function createWindow(url) {
     },
   });
 
-  // Confirmation avant fermeture (protection anti-clic malencontreux sur la
-  // croix — couvre aussi Alt+F4, qui déclenche le même évènement "close").
-  let closeConfirmed = false;
   mainWindow.on("close", (e) => {
     if (closeConfirmed) return;
     e.preventDefault();
-    dialog
-      .showMessageBox(mainWindow, {
-        type: "question",
-        buttons: ["Annuler", "Fermer"],
-        defaultId: 0,
-        cancelId: 0,
-        title: "Fermer Horizon",
-        message: "Voulez-vous vraiment fermer l'application ?",
-      })
-      .then(({ response }) => {
-        if (response === 1) {
-          closeConfirmed = true;
-          mainWindow.close();
-        }
-      });
+    mainWindow.webContents.send("app:confirm-close");
   });
 
   await mainWindow.loadURL(url);
 }
+
+ipcMain.on("app:confirm-close-response", (_event, confirmed) => {
+  if (confirmed && mainWindow && !mainWindow.isDestroyed()) {
+    closeConfirmed = true;
+    mainWindow.close();
+  }
+});
 
 function sendUpdateStatus(status) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -134,6 +132,8 @@ autoUpdater.on("error", (err) => sendUpdateStatus({ state: "error", message: err
 // Déclenché par le bouton "Vérifier les mises à jour" des Paramètres — le
 // résultat (trouvée/absente/erreur) arrive de façon asynchrone via les
 // évènements autoUpdater ci-dessus, relayés par sendUpdateStatus.
+ipcMain.handle("app:get-version", () => app.getVersion());
+
 ipcMain.handle("updater:check", async () => {
   if (!app.isPackaged) return { state: "unavailable" };
   try {
@@ -145,6 +145,10 @@ ipcMain.handle("updater:check", async () => {
 });
 
 ipcMain.on("updater:quit-and-install", () => {
+  // L'utilisateur a déjà donné son accord explicite en cliquant sur
+  // "Redémarrer et installer" — la confirmation de fermeture ne doit pas se
+  // déclencher une seconde fois pour cette fermeture-là.
+  closeConfirmed = true;
   autoUpdater.quitAndInstall();
 });
 

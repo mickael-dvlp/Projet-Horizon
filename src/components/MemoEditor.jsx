@@ -60,12 +60,15 @@ export default function MemoEditor({
   onAddScene,
   onDeleteScene,
   onToast,
+  taskFocus,
 }) {
   useRestoreFocus();
   const [isDirty, setIsDirty] = useState(false);
-  const [isTasksOpen, setIsTasksOpen] = useState(false);
+  // Source unique pour les panneaux Tâches/Scènes : ouvrir l'un ferme l'autre
+  // par construction, au lieu de deux booléens indépendants qui pouvaient
+  // être actifs en même temps.
+  const [activePanel, setActivePanel] = useState(null); // "tasks" | "scenes" | null
   const [activeSceneId, setActiveSceneId] = useState(null);
-  const [showScenes, setShowScenes] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState("");
   const [panelWidth, setPanelWidth] = useState(512);
@@ -125,14 +128,14 @@ export default function MemoEditor({
   // scène reste éditable directement comme avant.
   useEffect(() => {
     setActiveSceneId(null);
-    setShowScenes((page?.scenes?.length || 0) > 0);
+    setActivePanel((page?.scenes?.length || 0) > 0 ? "scenes" : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page?.id]);
 
   // Rechargement du document actif. Dépend de `docKey` (changement de
-  // chapitre/scène) ET de `showScenes` (la zone éditable est démontée puis
-  // remontée quand on bascule vers/depuis la liste des scènes du même
-  // chapitre, ce qui vide sa `innerHTML` : il faut la re-remplir). Le
+  // chapitre/scène) ET de `activePanel === "scenes"` (la zone éditable est
+  // démontée puis remontée quand on bascule vers/depuis la liste des scènes
+  // du même chapitre, ce qui vide sa `innerHTML` : il faut la re-remplir). Le
   // compteur, lui, est désormais calculé depuis `unit.content` et non plus
   // depuis le DOM (`editorRef.current`) : il reste donc correct même quand
   // la zone éditable n'est pas montée (ex. liste des scènes affichée à la
@@ -153,17 +156,31 @@ export default function MemoEditor({
     // chaque clic sur "Enregistrer" (qui met à jour unit.content)
     // redéclencherait cet effet et réinitialiserait le curseur/la sélection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docKey, showScenes]);
+  }, [docKey, activePanel === "scenes"]);
 
-  // Referme le panneau Tâches à chaque changement réel de document
-  // (chapitre ↔ scène) — sans ça, il restait ouvert et basculait
+  // Referme le panneau Tâches (uniquement) à chaque changement réel de
+  // document (chapitre ↔ scène) — sans ça, il restait ouvert et basculait
   // silencieusement sur les tâches du nouveau document sans action
-  // explicite de l'utilisateur (bouton "actif" mais contexte obsolète).
-  // Uniquement docKey (pas showScenes) : basculer la vue Scènes pour le
-  // même chapitre n'est pas un changement de document.
+  // explicite de l'utilisateur. Ne touche pas "scenes" : basculer entre un
+  // chapitre et l'une de ses scènes n'est pas censé faire perdre la vue
+  // Scènes à laquelle on reviendra (cf. effet page?.id ci-dessus, qui la
+  // recalcule uniquement sur un vrai changement de chapitre).
   useEffect(() => {
-    setIsTasksOpen(false);
+    setActivePanel((prev) => (prev === "tasks" ? null : prev));
   }, [docKey]);
+
+  // Tâche de chapitre/scène ciblée depuis le tableau de bord (voir
+  // `taskFocus` dans page.jsx) : ouvre le panneau Tâches et, pour une tâche
+  // de scène, bascule sur cette scène. Placé après les effets ci-dessus pour
+  // avoir le dernier mot sur activePanel/activeSceneId, qu'ils réinitialisent
+  // par ailleurs à chaque changement de document.
+  useEffect(() => {
+    if (!taskFocus || taskFocus.kind === "book") return;
+    if (taskFocus.kind === "scene" && taskFocus.sceneId) {
+      setActiveSceneId(taskFocus.sceneId);
+    }
+    setActivePanel("tasks");
+  }, [taskFocus]);
 
   useEffect(() => {
     if (isEditingTitle) titleInputRef.current?.focus();
@@ -471,13 +488,13 @@ export default function MemoEditor({
 
           <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-1" />
           <button
-            onClick={() => setIsTasksOpen((v) => !v)}
+            onClick={() => setActivePanel((v) => (v === "tasks" ? null : "tasks"))}
             title="Tâches"
             aria-label={`Tâches — ${unit.tasks?.length || 0} élément${(unit.tasks?.length || 0) !== 1 ? "s" : ""}`}
-            aria-expanded={isTasksOpen}
+            aria-expanded={activePanel === "tasks"}
             aria-controls="memo-tasks-panel"
             className={`p-2 rounded-md transition-colors relative ${
-              isTasksOpen
+              activePanel === "tasks"
                 ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400"
                 : "text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10"
             }`}
@@ -492,13 +509,13 @@ export default function MemoEditor({
 
           {!isScene && onAddScene && (
             <button
-              onClick={() => setShowScenes((v) => !v)}
+              onClick={() => setActivePanel((v) => (v === "scenes" ? null : "scenes"))}
               title="Scènes"
               aria-label={`Scènes — ${page.scenes?.length || 0} élément${(page.scenes?.length || 0) !== 1 ? "s" : ""}`}
-              aria-expanded={showScenes}
+              aria-expanded={activePanel === "scenes"}
               aria-controls="memo-scenes-panel"
               className={`p-2 rounded-md transition-colors relative ${
-                showScenes
+                activePanel === "scenes"
                   ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400"
                   : "text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10"
               }`}
@@ -515,7 +532,7 @@ export default function MemoEditor({
         </div>
 
         {/* Panneau tâches */}
-        {isTasksOpen && (
+        {activePanel === "tasks" && (
           <div id="memo-tasks-panel" className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 shrink-0">
             <TaskList
               tasks={unit.tasks || []}
@@ -528,12 +545,13 @@ export default function MemoEditor({
               onDelete={(taskId) =>
                 saveUnit({ tasks: (unit.tasks || []).filter((t) => t.id !== taskId) })
               }
+              highlightTaskId={taskFocus?.kind !== "book" ? taskFocus?.taskId : null}
             />
           </div>
         )}
 
         {/* Zone d'édition : liste des scènes (chapitre uniquement) ou contenu éditable */}
-        {!isScene && showScenes ? (
+        {!isScene && activePanel === "scenes" ? (
           <SceneListPanel
             id="memo-scenes-panel"
             scenes={page.scenes || []}

@@ -103,5 +103,35 @@ export function useKanbanDnD(logic) {
     }
   };
 
-  return { sensors, handleDragStart, handleDragOver, handleDragEnd };
+  // Sans ceci, dnd-kit annonce par défaut les ids bruts ("p-1699999999999
+  // was dropped over col-...") au lecteur d'écran — on les résout vers des
+  // phrases lisibles à partir des titres réels d'arc/chapitre.
+  const describe = (id) => {
+    const col = logic.columns.find((c) => c.id === id);
+    if (col) return `l'arc "${col.title}"`;
+    const page = logic.columns.flatMap((c) => c.pages).find((p) => p.id === id);
+    if (page) return `le chapitre "${page.title}"`;
+    return "l'élément";
+  };
+
+  const announcements = {
+    onDragStart: ({ active }) => `${describe(active.id)} sélectionné, en cours de déplacement.`,
+    onDragOver: ({ active, over }) =>
+      over
+        ? `${describe(active.id)} déplacé au-dessus de ${describe(over.id)}.`
+        : `${describe(active.id)} n'est plus au-dessus d'une zone de dépôt valide.`,
+    onDragEnd: ({ active, over }) => {
+      if (!over) return `${describe(active.id)} n'a pas été déplacé.`;
+      if (logic.columns.some((c) => c.id === active.id)) {
+        return `${describe(active.id)} repositionné.`;
+      }
+      const targetCol = logic.columns.find((c) => c.pages.some((p) => p.id === over.id) || c.id === over.id);
+      return targetCol
+        ? `${describe(active.id)} déplacé vers l'arc "${targetCol.title}".`
+        : `${describe(active.id)} déplacé.`;
+    },
+    onDragCancel: ({ active }) => `Déplacement de ${describe(active.id)} annulé.`,
+  };
+
+  return { sensors, handleDragStart, handleDragOver, handleDragEnd, announcements };
 }

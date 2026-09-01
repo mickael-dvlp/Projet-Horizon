@@ -1,8 +1,9 @@
 "use client";
+import { useEffect, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
 import { useCreateForm } from "@/hooks/useCreateForm";
 
-export default function TaskList({ tasks = [], onAdd, onToggle, onDelete }) {
+export default function TaskList({ tasks = [], onAdd, onToggle, onDelete, highlightTaskId }) {
   const {
     value: newLabel,
     setValue: setNewLabel,
@@ -11,6 +12,20 @@ export default function TaskList({ tasks = [], onAdd, onToggle, onDelete }) {
   } = useCreateForm(onAdd);
 
   const done = tasks.filter((t) => t.done).length;
+
+  // Tâche ciblée depuis le tableau de bord : défile jusqu'à elle et la met
+  // en évidence brièvement. État local distinct de `highlightTaskId` pour
+  // que la surbrillance s'efface d'elle-même après 2s, indépendamment de la
+  // durée pendant laquelle le parent garde la cible en mémoire.
+  const [flashTaskId, setFlashTaskId] = useState(null);
+  useEffect(() => {
+    if (!highlightTaskId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFlashTaskId(highlightTaskId);
+    document.getElementById(`task-${highlightTaskId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setFlashTaskId(null), 2000);
+    return () => clearTimeout(timer);
+  }, [highlightTaskId]);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -29,7 +44,13 @@ export default function TaskList({ tasks = [], onAdd, onToggle, onDelete }) {
       )}
 
       {tasks.map((task) => (
-        <div key={task.id} className="group flex items-center gap-2 px-1">
+        <div
+          key={task.id}
+          id={`task-${task.id}`}
+          className={`group flex items-center gap-2 px-1 rounded-md transition-colors ${
+            task.id === flashTaskId ? "ring-2 ring-indigo-400 bg-indigo-50 dark:bg-indigo-500/10" : ""
+          }`}
+        >
           <button
             onClick={() => onToggle(task.id)}
             aria-label={task.done ? `Marquer "${task.label}" non terminée` : `Marquer "${task.label}" terminée`}
@@ -53,7 +74,8 @@ export default function TaskList({ tasks = [], onAdd, onToggle, onDelete }) {
           </span>
           <button
             onClick={() => onDelete(task.id)}
-            className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-300 dark:text-slate-600 hover:text-red-500 transition-all shrink-0"
+            aria-label={`Supprimer la tâche "${task.label}"`}
+            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-0.5 text-slate-300 dark:text-slate-600 hover:text-red-500 transition-all shrink-0"
             title="Supprimer"
           >
             <X size={13} />

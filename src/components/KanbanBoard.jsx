@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DndContext, closestCorners, DragOverlay } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -16,6 +16,7 @@ export default function KanbanBoard({
   handleDragStart,
   handleDragOver,
   handleDragEnd,
+  announcements,
   setActivePage,
   addPage,
   setColumns,
@@ -35,15 +36,27 @@ export default function KanbanBoard({
   onDeleteSubProjectTask,
   hasMainBg = false,
   onOpenDashboard,
+  taskFocus,
 }) {
   const [isTasksOpen, setIsTasksOpen] = useState(false);
   const [view, setView] = useState("board");
+  // Fait entrer le nouvel arc en mode renommage immédiatement après création
+  // (cf. addColumn), au lieu de laisser "Nouvel arc" sans étape de nommage.
+  const [justCreatedColumnId, setJustCreatedColumnId] = useState(null);
   const totalPages = columns.reduce((acc, col) => acc + col.pages.length, 0);
   const undoneTasksCount = subProjectTasks.filter((t) => !t.done).length;
+
+  // Une tâche de livre ciblée depuis le tableau de bord ouvre ce panneau
+  // localement (les tâches de chapitre/scène sont gérées par MemoEditor).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (taskFocus?.kind === "book") setIsTasksOpen(true);
+  }, [taskFocus]);
 
   return (
     <DndContext
       sensors={sensors}
+      announcements={announcements}
       collisionDetection={closestCorners}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
@@ -84,7 +97,10 @@ export default function KanbanBoard({
               ci-dessus) ; à partir de md, titre et actions partagent la même ligne
               (justify-between) — jamais de positionnement en absolute qui pourrait
               chevaucher le titre à une largeur intermédiaire (ex. 768-1024px). */}
-          <div className="flex items-center gap-2 shrink-0 overflow-x-auto custom-scrollbar -mx-1 px-1 md:mx-0 md:px-0">
+          {/* flex-wrap plutôt qu'un défilement horizontal caché : "Nouvel arc"
+              doit rester atteignable sans geste de swipe non découvrable,
+              quitte à passer sur une deuxième ligne sous ~430px. */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 shrink-0">
               <button
                 onClick={() => setView("plan")}
@@ -132,7 +148,7 @@ export default function KanbanBoard({
             )}
             {view === "board" && (
               <button
-                onClick={addColumn}
+                onClick={() => setJustCreatedColumnId(addColumn())}
                 className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 px-3 py-2 rounded-lg transition-colors border border-slate-200 dark:border-slate-700 hover:border-indigo-200 dark:hover:border-indigo-500/50 shrink-0"
               >
                 <Plus size={15} />
@@ -152,6 +168,7 @@ export default function KanbanBoard({
               onAdd={onAddSubProjectTask}
               onToggle={onToggleSubProjectTask}
               onDelete={onDeleteSubProjectTask}
+              highlightTaskId={taskFocus?.kind === "book" ? taskFocus.taskId : null}
             />
           </div>
         )}
@@ -188,6 +205,8 @@ export default function KanbanBoard({
                       prev.map((c) => (c.id === col.id ? { ...c, color } : c)),
                     )
                   }
+                  autoEdit={col.id === justCreatedColumnId}
+                  onAutoEditHandled={() => setJustCreatedColumnId(null)}
                 />
               ))}
             </SortableContext>

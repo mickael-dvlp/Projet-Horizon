@@ -15,6 +15,8 @@ import { useKanbanLogic } from "@/hooks/useKanbanLogic";
 import { useKanbanDnD } from "@/hooks/useKanbanDnD";
 import { useTheme } from "@/hooks/useTheme";
 import { useElectronUpdater } from "@/hooks/useElectronUpdater";
+import { useElectronCloseConfirm } from "@/hooks/useElectronCloseConfirm";
+import CloseConfirmModal from "@/components/CloseConfirmModal";
 
 function EmptyState({ onCreate }) {
   const [isCreating, setIsCreating] = useState(false);
@@ -91,24 +93,39 @@ export default function Home() {
   const { theme, setTheme } = useTheme();
   const { sidebarBg, setSidebarBg, mainBg, setMainBg } = logic;
   const updater = useElectronUpdater();
+  const closeConfirm = useElectronCloseConfirm();
   const [activeKbFile, setActiveKbFile] = useState(null);
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  // Tâche ciblée depuis le tableau de bord : ouvre le bon panneau Tâches et y
+  // met la ligne en évidence. `nonce` force le re-déclenchement des effets
+  // même en recliquant deux fois de suite sur la même tâche.
+  const [taskFocus, setTaskFocus] = useState(null);
 
   if (!logic.mounted || logic.loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500 italic">
-        Chargement...
-      </div>
+      <>
+        <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500 italic">
+          Chargement...
+        </div>
+        {closeConfirm.isOpen && (
+          <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
+        )}
+      </>
     );
   }
 
   if (!logic.user && !logic.isGuest) {
     return (
-      <AuthScreen
-        isAuthModalOpen={logic.isAuthModalOpen}
-        setIsAuthModalOpen={logic.setIsAuthModalOpen}
-        onGuestLogin={logic.handleGuestLogin}
-      />
+      <>
+        <AuthScreen
+          isAuthModalOpen={logic.isAuthModalOpen}
+          setIsAuthModalOpen={logic.setIsAuthModalOpen}
+          onGuestLogin={logic.handleGuestLogin}
+        />
+        {closeConfirm.isOpen && (
+          <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
+        )}
+      </>
     );
   }
 
@@ -121,9 +138,12 @@ export default function Home() {
   const activeProjectName =
     logic.projects.find((p) => p.id === logic.activeProjectId)?.name || "";
 
-  const handleOpenDashboardItem = (item) => {
+  const handleOpenDashboardItem = (item, isTask) => {
     setIsDashboardOpen(false);
     logic.handleSelectSubProject(logic.activeProjectId, item.subProjectId);
+    setTaskFocus(
+      isTask ? { taskId: item.id, kind: item.kind, sceneId: item.sceneId || null, nonce: Date.now() } : null
+    );
     if (!item.pageId) return;
     const col = (logic.allProjectsData[item.subProjectId] || []).find((c) =>
       c.pages.some((p) => p.id === item.pageId)
@@ -227,6 +247,7 @@ export default function Home() {
               handleDragStart={dnd.handleDragStart}
               handleDragOver={dnd.handleDragOver}
               handleDragEnd={dnd.handleDragEnd}
+              announcements={dnd.announcements}
               onRename={(id, newName) => logic.handleSavePage(id, { title: newName })}
               onDeleteColumn={logic.deleteColumn}
               hasMainBg={!!mainBg}
@@ -249,6 +270,7 @@ export default function Home() {
               onDeleteSubProjectTask={(taskId) =>
                 logic.deleteSubProjectTask(logic.activeProjectId, logic.activeSubProjectId, taskId)
               }
+              taskFocus={taskFocus}
             />
           ) : (
             <EmptyState onCreate={logic.handleCreateProject} />
@@ -263,6 +285,7 @@ export default function Home() {
               onAddScene={logic.addScene}
               onDeleteScene={logic.deleteScene}
               onToast={logic.showToast}
+              taskFocus={taskFocus}
             />
           )}
 
@@ -308,6 +331,10 @@ export default function Home() {
       )}
 
       <Toast toast={logic.toast} onDismiss={logic.dismissToast} />
+
+      {closeConfirm.isOpen && (
+        <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
+      )}
     </div>
   );
 }
