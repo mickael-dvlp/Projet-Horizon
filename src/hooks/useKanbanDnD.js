@@ -105,5 +105,3 @@ export function useKanbanDnD(logic) {
 
   return { sensors, handleDragStart, handleDragOver, handleDragEnd };
 }
-
-// Ce hook gère la logique de drag-and-drop pour les colonnes et les pages du tableau Kanban. Il utilise les capteurs de dnd-kit pour détecter les interactions de l'utilisateur et met à jour l'état des colonnes et des pages en conséquence.

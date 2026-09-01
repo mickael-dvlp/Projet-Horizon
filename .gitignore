@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/test-results
 
 # next.js
 /.next/
@@ -19,6 +20,9 @@
 
 # production
 /build
+
+# electron
+/dist
 
 # misc
 .DS_Store
@@ -39,6 +43,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# Firebase
-src/firebase/

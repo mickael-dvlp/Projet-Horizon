@@ -3,10 +3,11 @@ import { useState } from "react";
 export function useTrash() {
   const [trashItems, setTrashItems] = useState([]);
 
-  const moveToTrash = (item, type = "page") => {
+  const moveToTrash = (item, type = "page", origin = {}) => {
     setTrashItems((prev) => [
       {
         ...item,
+        ...origin,
         trashId: `trash-${Date.now()}`,
         originalType: type,
         deletedAt: new Date().toISOString(),

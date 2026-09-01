@@ -1,14 +1,116 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
-/* Variables de style */
 :root {
-  --background: #f8fafc; /* slate-50 */
-  --foreground: #0f172a; /* slate-900 */
+  --background: #f8fafc;
+  --foreground: #0f172a;
 }
 
-/* Styles de base */
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #e2e8f0;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+.memo-editor:empty::before {
+  content: "Commencez à écrire votre note...";
+  color: #cbd5e1;
+  pointer-events: none;
+}
+
+.dark .memo-editor:empty::before {
+  color: #475569;
+}
+
+.memo-editor ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+
+.memo-editor ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+
+.memo-editor h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0.75rem 0 0.25rem;
+  line-height: 1.3;
+}
+
+.memo-editor h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0.75rem 0 0.25rem;
+  line-height: 1.3;
+}
+
+.memo-editor h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #334155;
+  margin: 0.5rem 0 0.25rem;
+  line-height: 1.3;
+}
+
+.dark .memo-editor h1,
+.dark .memo-editor h2 {
+  color: #e2e8f0;
+}
+
+.dark .memo-editor h3 {
+  color: #cbd5e1;
+}
+
+/* Lecteur Base de connaissances */
+.kb-content { color: #334155; font-size: 0.875rem; line-height: 1.75; }
+.kb-content h1 { font-size: 1.5rem; font-weight: 700; color: #0f172a; margin: 1.25rem 0 0.5rem; line-height: 1.25; }
+.kb-content h2 { font-size: 1.2rem; font-weight: 700; color: #1e293b; margin: 1rem 0 0.4rem; line-height: 1.3; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.25rem; }
+.kb-content h3 { font-size: 1rem; font-weight: 600; color: #334155; margin: 0.75rem 0 0.3rem; }
+.kb-content p { margin: 0.25rem 0; }
+.kb-content strong { font-weight: 700; color: #1e293b; }
+.kb-content em { font-style: italic; }
+.kb-content code { background: #f1f5f9; border-radius: 4px; padding: 0.1em 0.4em; font-family: ui-monospace, monospace; font-size: 0.8rem; color: #6366f1; }
+.kb-content ul { list-style: disc; padding-left: 1.5rem; margin: 0.25rem 0; }
+.kb-content ol { list-style: decimal; padding-left: 1.5rem; margin: 0.25rem 0; }
+.kb-content li { margin: 0.15rem 0; }
+.kb-content blockquote { border-left: 3px solid #c7d2fe; padding-left: 1rem; color: #64748b; font-style: italic; margin: 0.5rem 0; }
+.kb-content hr { border: none; border-top: 1px solid #e2e8f0; margin: 1rem 0; }
+.kb-content .kb-spacer { height: 0.5rem; }
+
+.dark .kb-content { color: #cbd5e1; }
+.dark .kb-content h1 { color: #f1f5f9; }
+.dark .kb-content h2 { color: #e2e8f0; border-bottom-color: #334155; }
+.dark .kb-content h3 { color: #cbd5e1; }
+.dark .kb-content strong { color: #e2e8f0; }
+.dark .kb-content code { background: #1e293b; color: #a5b4fc; }
+.dark .kb-content blockquote { border-left-color: #4338ca; color: #94a3b8; }
+.dark .kb-content hr { border-top-color: #334155; }
