@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "electron": "electron .",
-    "electron:build": "next build && electron-builder --win",
+    "electron:build": "next build && electron-builder --win --publish never",
     "electron:release": "next build && dotenv -e .env.local -- electron-builder --win --publish always"
   },
   "dependencies": {
@@ -58,7 +58,8 @@
     "publish": {
       "provider": "github",
       "owner": "mickael-dvlp",
-      "repo": "Projet-Horizon"
+      "repo": "Projet-Horizon",
+      "releaseType": "release"
     },
     "win": {
       "target": "nsis",
