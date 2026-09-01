@@ -1,6 +1,6 @@
 {
   "name": "projet-memo-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "test:e2e": "playwright test",
     "electron": "electron .",
     "electron:build": "next build && electron-builder --win",
-    "electron:release": "next build && electron-builder --win --publish always"
+    "electron:release": "next build && dotenv -e .env.local -- electron-builder --win --publish always"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -30,6 +30,7 @@
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "babel-plugin-react-compiler": "1.0.0",
+    "dotenv-cli": "^11.0.0",
     "electron": "^38.8.6",
     "electron-builder": "^26.15.3",
     "eslint": "^9",
