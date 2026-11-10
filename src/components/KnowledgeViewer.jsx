@@ -89,8 +89,19 @@ export default function KnowledgeViewer({ file, onClose, onUpdateContent, onToas
     setIsEditing(true);
   };
 
+  // Échap, Annuler ou un clic sur le fond jetaient le brouillon sans
+  // prévenir : on demande confirmation dès qu'il diffère du contenu enregistré.
+  const confirmDiscard = () =>
+    !isEditing ||
+    draftContent === (file.content || "") ||
+    window.confirm("Abandonner les modifications non enregistrées de cette fiche ?");
+
   const handleCancelEdit = () => {
-    setIsEditing(false);
+    if (confirmDiscard()) setIsEditing(false);
+  };
+
+  const handleClose = () => {
+    if (confirmDiscard()) onClose();
   };
 
   const handleSaveEdit = () => {
@@ -107,14 +118,15 @@ export default function KnowledgeViewer({ file, onClose, onUpdateContent, onToas
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, isEditing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, isEditing, draftContent, file.content]);
 
   return (
     <>
       {/* Backdrop au-dessus du MemoEditor */}
       <div
         className="fixed inset-0 bg-slate-900/30 z-[55] animate-in fade-in duration-200"
-        onClick={onClose}
+        onClick={handleClose}
       />
 
       <div className="fixed inset-y-0 right-0 w-full sm:w-[560px] max-w-full sm:max-w-[90vw] bg-white dark:bg-slate-900 h-full flex flex-col shadow-2xl z-[60] animate-in slide-in-from-right duration-300 border-l border-slate-200 dark:border-slate-700 pr-[env(safe-area-inset-right)]">

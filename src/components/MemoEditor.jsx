@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useImperativeHandle } from "react";
 import DOMPurify from "dompurify";
 import { htmlToMarkdown } from "@/lib/htmlToMarkdown";
 import { triggerDownload, sanitizeFilename } from "@/lib/download";
@@ -61,6 +61,7 @@ export default function MemoEditor({
   onDeleteScene,
   onToast,
   taskFocus,
+  ref,
 }) {
   useRestoreFocus();
   const [isDirty, setIsDirty] = useState(false);
@@ -217,6 +218,38 @@ export default function MemoEditor({
     onClose();
   };
 
+  // Enregistre le texte en cours avant de quitter le document affiché : la
+  // zone éditable est remontée à chaque changement de document (chapitre ↔
+  // scène, ou bascule vers la liste des scènes), ce qui effaçait sans
+  // avertissement tout ce qui n'avait pas été enregistré.
+  const flushCurrent = () => {
+    if (!isDirty || !editorRef.current) return;
+    saveUnit({ content: getContent() });
+    setIsDirty(false);
+  };
+
+  const leaveDocument = (navigate) => {
+    flushCurrent();
+    navigate();
+  };
+
+  // Permet à la page d'enregistrer l'éditeur avant la fermeture de l'app.
+  useImperativeHandle(ref, () => ({ flush: flushCurrent }));
+
+  // Navigateur : demande confirmation avant de quitter la page avec du texte
+  // non enregistré. Pas dans Electron, où un beforeunload bloquant empêcherait
+  // silencieusement la fenêtre de se fermer (la confirmation de fermeture de
+  // l'app enregistre l'éditeur à la place).
+  useEffect(() => {
+    if (!isDirty || window.electronAPI) return;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
+
   const handleSave = () => {
     saveUnit({ content: getContent() });
     setIsDirty(false);
@@ -325,7 +358,7 @@ export default function MemoEditor({
               <p className="text-[10px] font-semibold text-indigo-500 dark:text-indigo-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5 md:justify-center">
                 {isScene && (
                   <button
-                    onClick={() => setActiveSceneId(null)}
+                    onClick={() => leaveDocument(() => setActiveSceneId(null))}
                     className="hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-0.5 -ml-0.5"
                     title="Retour au chapitre"
                   >
@@ -509,7 +542,9 @@ export default function MemoEditor({
 
           {!isScene && onAddScene && (
             <button
-              onClick={() => setActivePanel((v) => (v === "scenes" ? null : "scenes"))}
+              onClick={() =>
+                leaveDocument(() => setActivePanel((v) => (v === "scenes" ? null : "scenes")))
+              }
               title="Scènes"
               aria-label={`Scènes — ${page.scenes?.length || 0} élément${(page.scenes?.length || 0) !== 1 ? "s" : ""}`}
               aria-expanded={activePanel === "scenes"}
@@ -555,7 +590,7 @@ export default function MemoEditor({
           <SceneListPanel
             id="memo-scenes-panel"
             scenes={page.scenes || []}
-            onOpen={(sceneId) => setActiveSceneId(sceneId)}
+            onOpen={(sceneId) => leaveDocument(() => setActiveSceneId(sceneId))}
             onAdd={(title) => onAddScene(page.id, title)}
             onDelete={(sceneId) => onDeleteScene(page.id, sceneId)}
             onUpdate={(sceneId, updates) => onSaveScene(page.id, sceneId, updates)}
@@ -623,7 +658,7 @@ export default function MemoEditor({
           </span>
           <div className="flex items-center gap-2 justify-end">
             <button
-              onClick={onClose}
+              onClick={handleCloseClick}
               className="px-4 py-2 text-sm text-slate-500 dark:text-slate-400 font-semibold hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
             >
               Annuler

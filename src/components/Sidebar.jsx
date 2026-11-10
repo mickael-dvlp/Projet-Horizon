@@ -27,6 +27,11 @@ import { isKbFileVisibleForBook } from "@/lib/knowledgeBase";
 import { searchKbFiles } from "@/lib/kbSearch";
 import { useCreateForm } from "@/hooks/useCreateForm";
 
+// Une fiche est stockée dans le même document Firestore que tout le reste
+// (limite 1 Mio) : au-delà, une seule importation pourrait bloquer toutes
+// les sauvegardes suivantes.
+const MAX_KB_FILE_BYTES = 500 * 1024;
+
 export default function Sidebar({
   user,
   onLogout,
@@ -56,6 +61,7 @@ export default function Sidebar({
   onAddKbFile,
   onDeleteKbFile,
   onSetKbFileScope,
+  onToast,
 }) {
   const [isOpen, setIsOpen] = useState(true);
   // Tiroir superposé sous le point de repère mobile (md) : indépendant de
@@ -77,11 +83,16 @@ export default function Sidebar({
 
   const handleFileImport = (e) => {
     const file = e.target.files[0];
+    e.target.value = "";
     if (!file) return;
+    if (file.size > MAX_KB_FILE_BYTES) {
+      onToast?.("error", `Fichier trop volumineux (${Math.round(file.size / 1024)} Ko, maximum 500 Ko).`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (ev) => onAddKbFile(file.name, ev.target.result);
+    reader.onerror = () => onToast?.("error", `Impossible de lire le fichier "${file.name}".`);
     reader.readAsText(file, "UTF-8");
-    e.target.value = "";
   };
 
   const createProjectRef = useRef(null);

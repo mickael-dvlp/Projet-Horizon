@@ -57,6 +57,32 @@ function updateStatusText(status) {
   }
 }
 
+const GAUGE_COLORS = {
+  ok: "bg-indigo-500",
+  warning: "bg-amber-400",
+  critical: "bg-red-500",
+};
+
+// Part de l'espace disponible déjà utilisée (document Firestore de 1 Mio
+// pour un compte, stockage local du navigateur pour un invité).
+function StorageGauge({ usage }) {
+  const percent = Math.round(usage.ratio * 100);
+  return (
+    <div className="mb-3">
+      <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+        <span>Espace de stockage utilisé</span>
+        <span className="tabular-nums font-semibold">{percent} %</span>
+      </div>
+      <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${GAUGE_COLORS[usage.level] || GAUGE_COLORS.ok}`}
+          style={{ width: `${Math.min(100, percent)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BackgroundGallery({ folder, value, onChange }) {
   return (
     <div className="grid grid-cols-6 gap-1.5">
@@ -102,6 +128,7 @@ export default function SettingsModal({
   onExport,
   onExportZip,
   onDeleteAll,
+  storageUsage,
   updater,
 }) {
   useRestoreFocus();
@@ -305,6 +332,8 @@ export default function SettingsModal({
             <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
               Compte &amp; données
             </h3>
+
+            {storageUsage && <StorageGauge usage={storageUsage} />}
 
             <div className="flex flex-col gap-2">
               <button

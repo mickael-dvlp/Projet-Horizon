@@ -93,7 +93,11 @@ export default function Home() {
   const { theme, setTheme } = useTheme();
   const { sidebarBg, setSidebarBg, mainBg, setMainBg } = logic;
   const updater = useElectronUpdater();
-  const closeConfirm = useElectronCloseConfirm();
+  const editorRef = useRef(null);
+  const closeConfirm = useElectronCloseConfirm({
+    onBeforeClose: () => editorRef.current?.flush(),
+    onPersist: logic.flushSave,
+  });
   const [activeKbFile, setActiveKbFile] = useState(null);
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
   // Tâche ciblée depuis le tableau de bord : ouvre le bon panneau Tâches et y
@@ -210,6 +214,7 @@ export default function Home() {
           if (activeKbFile?.id === id) setActiveKbFile(null);
           logic.deleteKbFile(id);
         }}
+        onToast={logic.showToast}
       />
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
@@ -227,6 +232,17 @@ export default function Home() {
         )}
 
         <div className="relative z-10 flex-1 flex flex-col min-w-0 overflow-hidden">
+          {logic.storageUsage?.level === "critical" && (
+            <div
+              role="alert"
+              className="shrink-0 px-4 pl-16 md:pl-4 py-2 text-xs font-semibold text-center text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border-b border-red-100 dark:border-red-500/20"
+            >
+              Espace de stockage presque plein ({Math.round(logic.storageUsage.ratio * 100)} %) : au-delà
+              de 100 %, plus rien ne pourra être enregistré. Videz la corbeille ou exportez puis supprimez
+              d’anciens contenus.
+            </div>
+          )}
+
           {isDashboardOpen ? (
             <Dashboard
               project={logic.projects.find((p) => p.id === logic.activeProjectId) || null}
@@ -278,6 +294,7 @@ export default function Home() {
 
           {logic.activePage && (
             <MemoEditor
+              ref={editorRef}
               page={logic.activePage}
               onClose={() => logic.setActivePage(null)}
               onSave={logic.handleSavePage}
@@ -326,6 +343,7 @@ export default function Home() {
           onExport={logic.exportAllData}
           onExportZip={logic.exportAllDataZip}
           onDeleteAll={logic.deleteAllData}
+          storageUsage={logic.storageUsage}
           updater={updater}
         />
       )}

@@ -13,7 +13,8 @@ export default function CloseConfirmModal({ onConfirm, onCancel }) {
         </div>
         <p className="font-bold text-slate-800 dark:text-slate-100 mb-1">Fermer Horizon ?</p>
         <p className="text-sm text-slate-400 dark:text-slate-500 mb-6 leading-relaxed">
-          Voulez-vous vraiment quitter l’application ?
+          Voulez-vous vraiment quitter l’application ? Les modifications en
+          cours seront enregistrées avant la fermeture.
         </p>
         <div className="flex flex-col gap-2">
           <button
