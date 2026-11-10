@@ -31,8 +31,8 @@
     "@tailwindcss/postcss": "^4",
     "babel-plugin-react-compiler": "1.0.0",
     "dotenv-cli": "^11.0.0",
-    "electron": "^38.8.6",
-    "electron-builder": "^26.15.3",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "eslint": "^9",
     "eslint-config-next": "^16.3.2",
     "jsdom": "^30.0.1",
@@ -44,6 +44,7 @@
     "productName": "Horizon",
     "files": [
       "electron/**/*",
+      "!electron/**/*.test.js",
       "package.json"
     ],
     "extraResources": [
