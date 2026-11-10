@@ -1,6 +1,37 @@
-// Remplace les caractères invalides dans un nom de fichier/dossier.
+// Noms interdits par Windows, avec ou sans extension ("CON", "nul.md"…).
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+const MAX_FILENAME_LENGTH = 120;
+
+// Rend un titre utilisable comme nom de fichier/dossier sur tous les
+// systèmes : caractères interdits remplacés, caractères de contrôle retirés,
+// points et espaces retirés aux extrémités (".." remonterait d'un dossier à
+// l'extraction, et Windows refuse un nom finissant par un point), noms
+// réservés de Windows suffixés, longueur limitée.
 export function sanitizeFilename(name) {
-  return (name || "sans-titre").replace(/[/\\:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
+  const cleaned = (name || "")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[/\\:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .slice(0, MAX_FILENAME_LENGTH)
+    .replace(/^[.\s]+|[.\s]+$/g, "");
+  if (!cleaned) return "sans-titre";
+  return WINDOWS_RESERVED_NAME.test(cleaned) ? `${cleaned}_` : cleaned;
+}
+
+// Attribue des noms uniques au sein d'un même dossier : un doublon reçoit
+// " (2)", " (3)"… avant son extension — sans quoi un second chapitre (ou
+// livre, arc, fiche) du même nom écrasait le premier dans l'archive.
+// Comparaison insensible à la casse, comme Windows et macOS.
+export function createNameAllocator(reserved = []) {
+  const used = new Set(reserved.map((n) => n.toLowerCase()));
+  return (name, ext = "") => {
+    let candidate = `${name}${ext}`;
+    for (let n = 2; used.has(candidate.toLowerCase()); n++) {
+      candidate = `${name} (${n})${ext}`;
+    }
+    used.add(candidate.toLowerCase());
+    return candidate;
+  };
 }
 
 // Déclenche le téléchargement d'un Blob depuis le navigateur.

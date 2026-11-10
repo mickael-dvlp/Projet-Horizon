@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
   X,
@@ -17,8 +17,10 @@ import {
   Database,
   RefreshCw,
   RotateCw,
+  Upload,
 } from "lucide-react";
 import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
+import { MAX_BACKUP_BYTES } from "@/lib/backup";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
 
 const THEME_OPTIONS = [
@@ -127,14 +129,21 @@ export default function SettingsModal({
   setSettings,
   onExport,
   onExportZip,
+  onImport,
   onDeleteAll,
+  canDeleteAccount = false,
   storageUsage,
   updater,
 }) {
   useRestoreFocus();
   const [confirmText, setConfirmText] = useState("");
   const [isDeleted, setIsDeleted] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteAccount, setDeleteAccount] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState(null);
   const [isZipping, setIsZipping] = useState(false);
+  const [importMessage, setImportMessage] = useState(null);
+  const importInputRef = useRef(null);
   const [activeTab, setActiveTab] = useState("apparence");
 
   useEffect(() => {
@@ -154,9 +163,45 @@ export default function SettingsModal({
   };
 
   const handleDeleteAll = async () => {
-    await onDeleteAll();
-    setIsDeleted(true);
-    setConfirmText("");
+    setIsDeleting(true);
+    setDeleteMessage(null);
+    try {
+      const result = await onDeleteAll({ deleteAccount });
+      setDeleteMessage(result?.message || null);
+      if (result?.ok) {
+        setIsDeleted(true);
+        setConfirmText("");
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > MAX_BACKUP_BYTES) {
+      setImportMessage("Fichier trop volumineux (10 Mo maximum).");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Remplacer toutes vos données actuelles par cette sauvegarde ? " +
+          "Exportez d'abord vos données actuelles si vous souhaitez les conserver."
+      )
+    ) {
+      return;
+    }
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      setImportMessage("Impossible de lire ce fichier.");
+      return;
+    }
+    const result = onImport(text);
+    setImportMessage(result.ok ? "Sauvegarde importée." : result.message);
   };
 
   const handleExportZip = async () => {
@@ -352,6 +397,27 @@ export default function SettingsModal({
                 {isZipping ? <Loader2 size={15} className="animate-spin" /> : <FileArchive size={15} />}
                 Exporter en .zip (chapitres en .md)
               </button>
+
+              <button
+                onClick={() => importInputRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 px-4 py-2.5 rounded-xl font-semibold text-sm transition-colors"
+              >
+                <Upload size={15} />
+                Importer une sauvegarde (.json)
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                aria-label="Fichier de sauvegarde à importer"
+                onChange={handleImportFile}
+              />
+              {importMessage && (
+                <p role="status" className="text-xs text-slate-500 dark:text-slate-400">
+                  {importMessage}
+                </p>
+              )}
             </div>
 
             <div className="mt-4 border border-red-100 dark:border-red-500/20 bg-red-50/50 dark:bg-red-500/5 rounded-xl p-4">
@@ -359,6 +425,12 @@ export default function SettingsModal({
                 <AlertTriangle size={15} />
                 Zone de danger
               </div>
+
+              {deleteMessage && (
+                <p role="status" className="text-xs text-red-600 dark:text-red-400 mb-3 leading-relaxed">
+                  {deleteMessage}
+                </p>
+              )}
 
               {isDeleted ? (
                 <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -381,13 +453,24 @@ export default function SettingsModal({
                     placeholder={DELETE_CONFIRM_WORD}
                     className="w-full text-sm border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 mb-3 outline-none focus:ring-2 focus:ring-red-300/40 dark:focus:ring-red-500/30 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200"
                   />
+                  {canDeleteAccount && (
+                    <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 mb-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={deleteAccount}
+                        onChange={(e) => setDeleteAccount(e.target.checked)}
+                        className="mt-0.5 accent-red-600"
+                      />
+                      Supprimer aussi mon compte (connexion Google demandée si nécessaire)
+                    </label>
+                  )}
                   <button
                     onClick={handleDeleteAll}
-                    disabled={confirmText !== DELETE_CONFIRM_WORD}
+                    disabled={confirmText !== DELETE_CONFIRM_WORD || isDeleting}
                     className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg font-semibold text-sm transition-colors"
                   >
-                    <Trash2 size={15} />
-                    Supprimer toutes mes données
+                    {isDeleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                    {deleteAccount ? "Supprimer mes données et mon compte" : "Supprimer toutes mes données"}
                   </button>
                 </>
               )}

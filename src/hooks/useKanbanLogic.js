@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
-import { auth, db } from "@/firebase/config";
+import { auth, db, googleProvider } from "@/firebase/config";
 import { useTrash } from "@/hooks/useTrash";
 import { htmlToMarkdown } from "@/lib/htmlToMarkdown";
 import { buildUniverseSummary } from "@/lib/universeSummary";
-import { triggerDownload, sanitizeFilename } from "@/lib/download";
+import { triggerDownload } from "@/lib/download";
+import { buildZipEntries } from "@/lib/exportData";
 import { restoreTrashItem } from "@/lib/trashRestore";
-import { onAuthStateChanged, signOut } from "firebase/auth";
+import { validateBackup } from "@/lib/backup";
+import { onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup } from "firebase/auth";
 import {
   doc,
   setDoc,
+  deleteDoc,
   onSnapshot,
   waitForPendingWrites,
   terminate,
@@ -30,8 +33,9 @@ const userDataKey = (uid) => `kanban-data-${uid}`;
 const DEFAULT_SETTINGS = { trashRetentionDays: 30, sidebarBg: null, mainBg: null };
 
 const SAVE_DEBOUNCE_MS = 500;
-// Attente maximale de la synchronisation avant déconnexion.
+// Attente maximale de la synchronisation avant déconnexion / suppression.
 const LOGOUT_SYNC_TIMEOUT_MS = 3000;
+const DELETE_SYNC_TIMEOUT_MS = 5000;
 
 // Limites de stockage : 1 Mio par document Firestore (compte connecté), et
 // ~5 millions de caractères pour le localStorage de Chromium (invité).
@@ -528,36 +532,56 @@ export function useKanbanLogic() {
       }
       const uid = user.uid;
       await signOut(auth);
-      // Sur un ordinateur partagé, rien du compte ne doit rester lisible
-      // après déconnexion : copie locale et cache Firestore (IndexedDB).
-      // terminate() est requis avant la purge du cache et rend `db`
-      // inutilisable, d'où le rechargement de la page.
-      localStorage.removeItem(userDataKey(uid));
-      try {
-        await terminate(db);
-        await clearIndexedDbPersistence(db);
-      } catch (error) {
-        console.error("Purge du cache Firestore impossible :", error);
-      }
-      window.location.reload();
+      await purgeDeviceCacheAndReload(uid);
       return;
     }
 
     localStorage.removeItem(GUEST_SESSION_KEY);
     setIsGuest(false);
+    resetAllState();
+    setUser(null);
+  };
+
+  const resetAllState = () => {
     setProjects([]);
     setSubProjects({});
     setAllProjectsData({});
     setKnowledgeBaseByProject({});
     setArcsByProject({});
+    setTrashItems([]);
     setActiveProjectId(null);
     setActiveSubProjectId(null);
     setActivePage(null);
-    setTrashItems([]);
     setSettings(DEFAULT_SETTINGS);
     setStorageUsage(null);
     usageLevelRef.current = "ok";
-    setUser(null);
+  };
+
+  // Sur un ordinateur partagé, rien du compte ne doit rester lisible après
+  // déconnexion : copie locale et cache Firestore (IndexedDB). terminate()
+  // est requis avant la purge du cache et rend `db` inutilisable, d'où le
+  // rechargement de la page.
+  const purgeDeviceCacheAndReload = async (uid) => {
+    localStorage.removeItem(userDataKey(uid));
+    try {
+      await terminate(db);
+      await clearIndexedDbPersistence(db);
+    } catch (error) {
+      console.error("Purge du cache Firestore impossible :", error);
+    }
+    window.location.reload();
+  };
+
+  // Firebase exige une connexion récente pour supprimer un compte : si elle
+  // date, on redemande la connexion Google avant de réessayer.
+  const deleteCurrentAccount = async () => {
+    try {
+      await deleteUser(auth.currentUser);
+    } catch (error) {
+      if (error?.code !== "auth/requires-recent-login") throw error;
+      await reauthenticateWithPopup(auth.currentUser, googleProvider);
+      await deleteUser(auth.currentUser);
+    }
   };
 
   // --- NAVIGATION ---
@@ -1004,55 +1028,10 @@ export function useKanbanLogic() {
   const exportAllDataZip = async () => {
     try {
       const zip = new JSZip();
-
-      projects.forEach((project) => {
-        const projectFolder = sanitizeFilename(project.name);
-        const books = subProjects[project.id] || [];
-
-        books.forEach((sub) => {
-          const bookFolder = sanitizeFilename(sub.name);
-          const columns = allProjectsData[sub.id] || [];
-
-          columns.forEach((col) => {
-            const arcFolder = sanitizeFilename(col.title);
-            col.pages.forEach((page) => {
-              const title = sanitizeFilename(page.title || "chapitre");
-              const md = `# ${page.title || "Sans titre"}\n\n${htmlToMarkdown(page.content || "")}`;
-              zip.file(`${projectFolder}/${bookFolder}/${arcFolder}/${title}.md`, md);
-              (page.scenes || []).forEach((scene) => {
-                const sceneTitle = sanitizeFilename(scene.title || "scène");
-                const sceneMd = `# ${scene.title || "Sans titre"}\n\n${htmlToMarkdown(scene.content || "")}`;
-                zip.file(
-                  `${projectFolder}/${bookFolder}/${arcFolder}/${title}/Scènes/${sceneTitle}.md`,
-                  sceneMd
-                );
-              });
-            });
-          });
-        });
-
-        // Une fiche univers-entier va sous Base de connaissances/ à la racine de
-        // l'univers ; une fiche scopée va dans le dossier de chacun des livres
-        // auxquels elle est rattachée (dupliquée si plusieurs), pour que chaque
-        // export de livre reste autonome.
-        (knowledgeBaseByProject[project.id] || []).forEach((file) => {
-          const scope = file.subProjectIds || [];
-          const fileName = sanitizeFilename(file.name);
-          if (scope.length === 0) {
-            zip.file(`${projectFolder}/Base de connaissances/${fileName}`, file.content || "");
-          } else {
-            scope.forEach((subId) => {
-              const book = books.find((b) => b.id === subId);
-              if (!book) return;
-              zip.file(
-                `${projectFolder}/${sanitizeFilename(book.name)}/Base de connaissances/${fileName}`,
-                file.content || ""
-              );
-            });
-          }
-        });
-      });
-
+      buildZipEntries(
+        { projects, subProjects, allProjectsData, knowledgeBaseByProject },
+        htmlToMarkdown
+      ).forEach(({ path, content }) => zip.file(path, content));
       zip.file("export.json", JSON.stringify(buildFullBackup(), null, 2));
 
       const blob = await zip.generateAsync({ type: "blob" });
@@ -1064,41 +1043,85 @@ export function useKanbanLogic() {
     }
   };
 
-  const deleteAllData = async () => {
+  // Remplace toutes les données par celles d'une sauvegarde JSON (format de
+  // buildFullBackup ci-dessus). Renvoie { ok, message }.
+  const importBackup = (text) => {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return { ok: false, message: "Ce fichier n'est pas un export JSON d'Horizon." };
+    }
+    const problem = validateBackup(data);
+    if (problem) return { ok: false, message: problem };
+
+    clearTimeout(saveTimerRef.current);
+    pendingSaveRef.current = null;
+    setActivePage(null);
+    applyData(data, { guest: isGuest });
+    // applyData tient ces données pour déjà synchronisées : on efface cette
+    // référence pour que l'effet de sauvegarde les écrive bien.
+    lastSyncedRef.current = null;
+    showToast("success", "Sauvegarde importée.");
+    return { ok: true };
+  };
+
+  // Supprime toutes les données — et, sur demande, le compte Firebase.
+  // Renvoie { ok, message } : les Paramètres n'annoncent la suppression que
+  // si elle a réellement eu lieu (ou est en file d'attente hors-ligne).
+  const deleteAllData = async ({ deleteAccount = false } = {}) => {
     // Abandonne toute sauvegarde en attente : elle réécrirait les données
     // qu'on est en train de supprimer.
     clearTimeout(saveTimerRef.current);
     pendingSaveRef.current = null;
-    setProjects([]);
-    setSubProjects({});
-    setAllProjectsData({});
-    setKnowledgeBaseByProject({});
-    setArcsByProject({});
-    setTrashItems([]);
-    setActiveProjectId(null);
-    setActiveSubProjectId(null);
-    setActivePage(null);
-    setSettings(DEFAULT_SETTINGS);
 
-    // Écriture directe via persist() : l'effet de sauvegarde automatique
-    // n'écrit rien quand projects est vide (garde anti-écrasement pendant le
-    // chargement initial), donc on déclenche l'écriture explicitement ici —
-    // en passant par persist() plutôt qu'un setDoc/localStorage.removeItem
-    // ad hoc, pour bénéficier de la même sérialisation et du même retour
-    // d'erreur que le reste des sauvegardes. Le cache local n'est purgé
-    // qu'une fois la suppression distante confirmée, pour ne jamais perdre
-    // le seul exemplaire des données si l'écriture Firestore échoue.
-    if (user) {
-      const succeeded = await persist({
-        dataToSave: {},
-        serialized: syncFingerprint({}),
-        uid: user.uid,
-        guest: false,
-      });
-      if (succeeded) localStorage.removeItem(userDataKey(user.uid));
-    } else if (isGuest) {
-      localStorage.removeItem(GUEST_DATA_KEY);
+    if (!user) {
+      resetAllState();
+      if (isGuest) localStorage.removeItem(GUEST_DATA_KEY);
+      return { ok: true };
     }
+
+    // deleteDoc ne se résout qu'à la confirmation du serveur : hors-ligne,
+    // la suppression reste dans la file persistante de Firestore et sera
+    // appliquée à la reconnexion. L'état local n'est vidé qu'ensuite, pour
+    // ne rien effacer à l'écran si la suppression est refusée.
+    const uid = user.uid;
+    const outcome = await Promise.race([
+      deleteDoc(doc(db, "users", uid)).then(
+        () => "done",
+        (error) => {
+          console.error("Erreur lors de la suppression :", error);
+          return "error";
+        }
+      ),
+      new Promise((resolve) => setTimeout(() => resolve("queued"), DELETE_SYNC_TIMEOUT_MS)),
+    ]);
+    if (outcome === "error") {
+      return { ok: false, message: "La suppression a échoué : vérifiez votre connexion puis réessayez." };
+    }
+    resetAllState();
+    lastSyncedRef.current = null;
+    localStorage.removeItem(userDataKey(uid));
+
+    if (!deleteAccount) {
+      return outcome === "queued"
+        ? { ok: true, message: "Suppression enregistrée : elle sera finalisée à la prochaine connexion." }
+        : { ok: true };
+    }
+    if (outcome === "queued") {
+      return {
+        ok: false,
+        message: "Données supprimées, mais une connexion est nécessaire pour supprimer le compte. Réessayez une fois en ligne.",
+      };
+    }
+    try {
+      await deleteCurrentAccount();
+    } catch (error) {
+      console.error("Erreur lors de la suppression du compte :", error);
+      return { ok: false, message: "Données supprimées, mais le compte n'a pas pu être supprimé. Réessayez." };
+    }
+    await purgeDeviceCacheAndReload(uid);
+    return { ok: true };
   };
 
   return {
@@ -1140,6 +1163,7 @@ export function useKanbanLogic() {
     storageUsage,
     exportAllData,
     exportAllDataZip,
+    importBackup,
     deleteAllData,
     trashItems,
     handleLogout,

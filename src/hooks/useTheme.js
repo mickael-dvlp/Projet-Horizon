@@ -15,17 +15,21 @@ function applyTheme(theme) {
 }
 
 export function useTheme() {
-  const [theme, setThemeState] = useState("system");
+  // null tant que la valeur enregistrée n'a pas été lue : appliquer "system"
+  // d'ici là annulait le thème déjà posé par le script de layout.jsx (flash
+  // clair/sombre au chargement quand le thème choisi diffère du système).
+  const [theme, setThemeState] = useState(null);
 
   useEffect(() => {
     // localStorage n'existe pas côté serveur : la lecture doit attendre le montage
     // (un lazy initializer de useState casserait l'hydratation SSR).
     const stored = localStorage.getItem(STORAGE_KEY);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (THEMES.includes(stored)) setThemeState(stored);
+    setThemeState(THEMES.includes(stored) ? stored : "system");
   }, []);
 
   useEffect(() => {
+    if (!theme) return;
     applyTheme(theme);
     if (theme !== "system") return;
 
@@ -41,5 +45,5 @@ export function useTheme() {
     setThemeState(next);
   }, []);
 
-  return { theme, setTheme };
+  return { theme: theme ?? "system", setTheme };
 }

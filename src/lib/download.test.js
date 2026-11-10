@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { triggerDownload, sanitizeFilename } from "./download";
+import { triggerDownload, sanitizeFilename, createNameAllocator } from "./download";
 
 describe("sanitizeFilename", () => {
   it("remplace les caractères invalides pour un nom de fichier", () => {
@@ -14,6 +14,35 @@ describe("sanitizeFilename", () => {
 
   it("compacte les espaces multiples", () => {
     expect(sanitizeFilename("Un   titre   avec   espaces")).toBe("Un titre avec espaces");
+  });
+
+  it("neutralise les noms qui remonteraient d'un dossier", () => {
+    expect(sanitizeFilename("..")).toBe("sans-titre");
+    expect(sanitizeFilename("../secret")).toBe("-secret");
+  });
+
+  it("retire les points et espaces finaux refusés par Windows", () => {
+    expect(sanitizeFilename("Chapitre 1. ")).toBe("Chapitre 1");
+  });
+
+  it("suffixe les noms réservés de Windows", () => {
+    expect(sanitizeFilename("CON")).toBe("CON_");
+    expect(sanitizeFilename("nul.md")).toBe("nul.md_");
+  });
+
+  it("retire les caractères de contrôle et limite la longueur", () => {
+    expect(sanitizeFilename("a\u0000b\u001fc")).toBe("abc");
+    expect(sanitizeFilename("x".repeat(500))).toHaveLength(120);
+  });
+});
+
+describe("createNameAllocator", () => {
+  it("suffixe les doublons sans tenir compte de la casse", () => {
+    const alloc = createNameAllocator(["Réservé"]);
+    expect(alloc("Chap", ".md")).toBe("Chap.md");
+    expect(alloc("chap", ".md")).toBe("chap (2).md");
+    expect(alloc("Chap", ".md")).toBe("Chap (3).md");
+    expect(alloc("réservé")).toBe("réservé (2)");
   });
 });
 

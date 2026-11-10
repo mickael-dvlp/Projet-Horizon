@@ -264,6 +264,7 @@ export default function Home() {
               handleDragOver={dnd.handleDragOver}
               handleDragEnd={dnd.handleDragEnd}
               announcements={dnd.announcements}
+              screenReaderInstructions={dnd.screenReaderInstructions}
               onRename={(id, newName) => logic.handleSavePage(id, { title: newName })}
               onDeleteColumn={logic.deleteColumn}
               hasMainBg={!!mainBg}
@@ -342,7 +343,9 @@ export default function Home() {
           setSettings={logic.setSettings}
           onExport={logic.exportAllData}
           onExportZip={logic.exportAllDataZip}
+          onImport={logic.importBackup}
           onDeleteAll={logic.deleteAllData}
+          canDeleteAccount={!!logic.user}
           storageUsage={logic.storageUsage}
           updater={updater}
         />

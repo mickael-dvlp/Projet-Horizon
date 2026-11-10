@@ -68,6 +68,23 @@ describe("buildUniverseSummary", () => {
     expect(chapterDeadline.chapterTitle).toBeNull();
   });
 
+  it("n'affiche pas l'échéance d'un élément terminé", () => {
+    const data = {
+      "sub-1": [
+        {
+          id: "c1",
+          pages: [
+            { id: "p1", title: "Fini", status: "done", deadline: "2020-01-01" },
+            { id: "p2", title: "En cours", status: "in_progress", deadline: "2020-01-02" },
+          ],
+        },
+      ],
+    };
+    const subs = { "proj-1": [{ id: "sub-1", name: "Livre 1" }] };
+    const { upcomingDeadlines } = buildUniverseSummary(subs, data, "proj-1");
+    expect(upcomingDeadlines.map((d) => d.title)).toEqual(["En cours"]);
+  });
+
   it("renvoie des listes vides sans planter pour un univers inconnu", () => {
     const summary = buildUniverseSummary(subProjects, allProjectsData, "proj-inexistant");
     expect(summary).toEqual({

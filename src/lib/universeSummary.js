@@ -26,7 +26,9 @@ export function buildUniverseSummary(subProjects, allProjectsData, projectId) {
     if (item.status === "to_review") {
       toReviewItems.push({ ...base, title: item.title || item.name });
     }
-    if (item.deadline) {
+    // Un élément terminé n'a plus d'échéance à surveiller : sans ce filtre,
+    // une échéance passée restait affichée en rouge indéfiniment.
+    if (item.deadline && item.status !== "done") {
       upcomingDeadlines.push({ ...base, title: item.title || item.name, deadline: item.deadline });
     }
   };
