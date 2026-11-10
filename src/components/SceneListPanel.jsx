@@ -1,17 +1,19 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Plus, Trash2, Layers, MoreHorizontal, Pencil } from "lucide-react";
-import { StatusDot, StatusMenu } from "@/components/StatusPicker";
-import { PriorityDot, PriorityMenu } from "@/components/PriorityPicker";
-import DeadlineField from "@/components/DeadlineField";
+import { StatusDot } from "@/components/StatusPicker";
+import { PriorityDot } from "@/components/PriorityPicker";
+import Popover from "@/components/Popover";
+import MetaMenu, { MenuSeparator } from "@/components/MetaMenu";
 import { formatShortDate } from "@/lib/date";
 import { useCreateForm } from "@/hooks/useCreateForm";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelete, onUpdate }) {
+  const confirm = useConfirm();
   const [menuOpenId, setMenuOpenId] = useState(null);
-  const [editingSceneId, setEditingSceneId] = useState(null);
-  const [editValue, setEditValue] = useState("");
-  const editInputRef = useRef(null);
+  const rename = useInlineRename((title, sceneId) => onUpdate(sceneId, { title }));
   const {
     value: newTitle,
     setValue: setNewTitle,
@@ -19,23 +21,11 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
     handleKeyDown: handleTitleKeyDown,
   } = useCreateForm(onAdd);
 
-  useEffect(() => {
-    if (editingSceneId) {
-      editInputRef.current?.focus();
-      editInputRef.current?.select();
-    }
-  }, [editingSceneId]);
-
-  const startRename = (scene) => {
-    setEditValue(scene.title || "");
-    setEditingSceneId(scene.id);
-    setMenuOpenId(null);
-  };
-
-  const saveRename = () => {
-    const trimmed = editValue.trim();
-    if (trimmed) onUpdate(editingSceneId, { title: trimmed });
-    setEditingSceneId(null);
+  // Échéance : referme le menu (choix ponctuel) ; statut/priorité le
+  // laissent ouvert pour pouvoir enchaîner les réglages.
+  const updateFromMenu = (sceneId, fields) => {
+    onUpdate(sceneId, fields);
+    if ("deadline" in fields) setMenuOpenId(null);
   };
 
   return (
@@ -50,25 +40,16 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
           {scenes.map((scene) => {
             const done = (scene.tasks || []).filter((t) => t.done).length;
             const total = (scene.tasks || []).length;
+            const sceneTitle = scene.title || "Sans titre";
             return (
               <div
                 key={scene.id}
                 className="group relative flex items-center gap-1 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
               >
-                {editingSceneId === scene.id ? (
+                {rename.isEditing(scene.id) ? (
                   <input
-                    ref={editInputRef}
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onBlur={saveRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveRename();
-                      if (e.key === "Escape") {
-                        e.stopPropagation();
-                        setEditingSceneId(null);
-                      }
-                    }}
-                    aria-label={`Nouveau nom de la scène ${scene.title || "Sans titre"}`}
+                    {...rename.inputProps}
+                    aria-label={`Nouveau nom de la scène ${sceneTitle}`}
                     className="flex-1 min-w-0 mx-4 my-2 text-sm font-medium bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-500/50 rounded-md px-2 py-1 outline-none text-slate-700 dark:text-slate-200"
                   />
                 ) : (
@@ -79,7 +60,7 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
                     <span className="flex items-center gap-3 min-w-0">
                       <StatusDot status={scene.status} />
                       <span className="flex-1 min-w-0 truncate text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {scene.title || "Sans titre"}
+                        {sceneTitle}
                       </span>
                       <PriorityDot priority={scene.priority} />
                       {total > 0 && (
@@ -97,7 +78,7 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
                 )}
                 <button
                   onClick={() => setMenuOpenId(menuOpenId === scene.id ? null : scene.id)}
-                  aria-label={`Options de la scène ${scene.title || "Sans titre"}`}
+                  aria-label={`Options de la scène ${sceneTitle}`}
                   className="opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 p-1.5 mr-2 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-all shrink-0"
                   title="Options"
                 >
@@ -105,50 +86,40 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
                 </button>
 
                 {menuOpenId === scene.id && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setMenuOpenId(null)} />
-                    <div className="absolute right-2 top-full mt-1 w-44 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-20 py-1 animate-in fade-in zoom-in-95 duration-100">
-                      <button
-                        onClick={() => startRename(scene)}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium"
-                      >
-                        <Pencil size={12} /> Renommer
-                      </button>
-                      <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                      <p className="px-3 pt-1 pb-1 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                        Statut
-                      </p>
-                      <StatusMenu value={scene.status} onChange={(status) => onUpdate(scene.id, { status })} />
-                      <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                      <p className="px-3 pt-0.5 pb-1 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                        Priorité
-                      </p>
-                      <PriorityMenu value={scene.priority} onChange={(priority) => onUpdate(scene.id, { priority })} />
-                      <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                      <div className="px-3 pt-0.5 pb-1.5">
-                        <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">
-                          Échéance
-                        </p>
-                        <DeadlineField
-                          value={scene.deadline}
-                          onChange={(deadline) => {
-                            onUpdate(scene.id, { deadline });
-                            setMenuOpenId(null);
-                          }}
-                        />
-                      </div>
-                      <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                      <button
-                        onClick={() => {
-                          setMenuOpenId(null);
-                          if (confirm(`Supprimer la scène "${scene.title || "Sans titre"}" ?`)) onDelete(scene.id);
-                        }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 font-medium"
-                      >
-                        <Trash2 size={12} /> Supprimer
-                      </button>
-                    </div>
-                  </>
+                  <Popover onClose={() => setMenuOpenId(null)} className="right-2 top-full mt-1 w-44 rounded-lg z-20 py-1">
+                    <button
+                      onClick={() => {
+                        setMenuOpenId(null);
+                        rename.start(scene.id, scene.title);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium"
+                    >
+                      <Pencil size={12} /> Renommer
+                    </button>
+                    <MenuSeparator />
+                    <MetaMenu
+                      status={scene.status}
+                      priority={scene.priority}
+                      deadline={scene.deadline}
+                      onChange={(fields) => updateFromMenu(scene.id, fields)}
+                    />
+                    <MenuSeparator />
+                    <button
+                      onClick={async () => {
+                        setMenuOpenId(null);
+                        const ok = await confirm({
+                          title: `Supprimer la scène « ${sceneTitle} » ?`,
+                          message: "Une scène supprimée ne passe pas par la corbeille : son texte sera perdu.",
+                          confirmLabel: "Supprimer",
+                          danger: true,
+                        });
+                        if (ok) onDelete(scene.id);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 font-medium"
+                    >
+                      <Trash2 size={12} /> Supprimer
+                    </button>
+                  </Popover>
                 )}
               </div>
             );

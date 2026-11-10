@@ -90,7 +90,9 @@ const USAGE_LEVEL_RANK = { ok: 0, warning: 1, critical: 2 };
 // Premier arc de tout nouveau livre.
 const createDefaultColumn = () => ({ id: newId("col"), title: "Arc 1", color: "indigo", pages: [] });
 
-export function useKanbanLogic() {
+// `confirm` : boîte de confirmation de l'app (useConfirm), utilisée avant
+// une déconnexion qui perdrait des modifications non synchronisées.
+export function useKanbanLogic({ confirm }) {
   const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
@@ -531,10 +533,14 @@ export function useKanbanLogic() {
       ]);
       if (
         !synced &&
-        !window.confirm(
-          "Certaines modifications ne sont pas encore synchronisées (pas de connexion ?). " +
-            "Se déconnecter maintenant les effacera de cet appareil. Continuer ?"
-        )
+        !(await confirm({
+          title: "Modifications non synchronisées",
+          message:
+            "Certaines modifications n’ont pas encore été envoyées (pas de connexion ?). " +
+            "Se déconnecter maintenant les effacera de cet appareil.",
+          confirmLabel: "Se déconnecter quand même",
+          danger: true,
+        }))
       ) {
         return;
       }
@@ -758,15 +764,20 @@ export function useKanbanLogic() {
     return newColumn.id;
   };
 
+  // Renommage ({ title }) ou changement de couleur ({ color }) d'un arc.
+  const updateColumn = (columnId, fields) => {
+    setColumns((prev) => prev.map((c) => (c.id === columnId ? { ...c, ...fields } : c)));
+  };
+
+  // Confirmation demandée en amont par Column.jsx.
   const deleteColumn = (columnId) => {
     const col = columns.find((c) => c.id === columnId);
-    if (col && window.confirm(`Supprimer l'arc "${col.title}" ?`)) {
-      moveToTrash(col, "column", {
-        projectId: activeProjectId,
-        subProjectId: activeSubProjectId,
-      });
-      setColumns((prev) => prev.filter((c) => c.id !== columnId));
-    }
+    if (!col) return;
+    moveToTrash(col, "column", {
+      projectId: activeProjectId,
+      subProjectId: activeSubProjectId,
+    });
+    setColumns((prev) => prev.filter((c) => c.id !== columnId));
   };
 
   // --- PAGES ---
@@ -1103,6 +1114,7 @@ export function useKanbanLogic() {
     handleSavePage,
     setColumns,
     removeFromTrash,
+    updateColumn,
     deleteColumn,
     knowledgeBase,
     addKbFile,

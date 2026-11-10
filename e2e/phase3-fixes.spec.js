@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsGuest, createUniverse } from "./helpers.js";
+import { loginAsGuest, createUniverse, confirmAppDialog } from "./helpers.js";
 
 async function addChapter(page, title) {
   await page.getByText("Ajouter un chapitre").click();
@@ -41,7 +41,6 @@ test.describe("Corrections fonctionnelles", () => {
   });
 
   test("une sauvegarde JSON exportée puis réimportée restaure les données", async ({ page }) => {
-    page.on("dialog", (dialog) => dialog.accept());
     await loginAsGuest(page);
     await createUniverse(page, "UniversSauvegarde");
     await addChapter(page, "Chapitre sauvegardé");
@@ -59,6 +58,7 @@ test.describe("Corrections fonctionnelles", () => {
     await expect(page.getByText("Toutes les données ont été supprimées.")).toBeVisible();
 
     await page.getByLabel("Fichier de sauvegarde à importer").setInputFiles(backupPath);
+    await confirmAppDialog(page, "Remplacer");
     await expect(page.getByRole("status").filter({ hasText: "Sauvegarde importée." }).first()).toBeVisible();
     await page.getByRole("button", { name: "Fermer", exact: true }).click();
 

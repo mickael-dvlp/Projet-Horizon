@@ -17,3 +17,9 @@ export async function createUniverse(page, name) {
   await page.getByPlaceholder("Nom de l'univers...").fill(name);
   await page.keyboard.press("Enter");
 }
+
+// Valide la boîte de confirmation de l'app (ConfirmDialog) en cliquant sur
+// le bouton indiqué.
+export async function confirmAppDialog(page, buttonName) {
+  await page.getByRole("alertdialog").getByRole("button", { name: buttonName, exact: true }).click();
+}

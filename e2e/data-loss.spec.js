@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsGuest, createUniverse } from "./helpers.js";
+import { loginAsGuest, createUniverse, confirmAppDialog } from "./helpers.js";
 
 async function openNewChapter(page, title) {
   await page.getByText("Ajouter un chapitre").click();
@@ -54,7 +54,6 @@ test.describe("Éditeur — pas de perte du texte non enregistré", () => {
 
 test.describe("Corbeille — une restauration impossible ne détruit rien", () => {
   test("un chapitre restauré dans un livre sans arc recrée un arc", async ({ page }) => {
-    page.on("dialog", (dialog) => dialog.accept());
     await loginAsGuest(page);
     await createUniverse(page, "UniversOrphelin");
 
@@ -66,6 +65,7 @@ test.describe("Corbeille — une restauration impossible ne détruit rien", () =
     await page.getByRole("button", { name: "Supprimer", exact: true }).click();
     await page.getByLabel("Options de l’arc Arc 1").click();
     await page.getByRole("button", { name: "Supprimer l'arc", exact: true }).click();
+    await confirmAppDialog(page, "Supprimer");
     await expect(page.getByText("0 arcs · 0 chapitres")).toBeVisible();
 
     await page.getByText("Corbeille", { exact: true }).click();

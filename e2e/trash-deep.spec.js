@@ -1,16 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { loginAsGuest, createUniverse } from "./helpers.js";
-
-// Accepte automatiquement les window.confirm() déclenchés par les actions de
-// suppression (Sidebar.jsx) et par la confirmation de suppression définitive
-// ajoutée dans TrashModal.jsx.
-function autoAcceptDialogs(page) {
-  page.on("dialog", (dialog) => dialog.accept());
-}
+import { loginAsGuest, createUniverse, confirmAppDialog } from "./helpers.js";
 
 test.describe("Corbeille — suppression profonde univers/livre", () => {
   test("suppression, persistance après rechargement, restauration intégrale, suppression définitive", async ({ page }) => {
-    autoAcceptDialogs(page);
     await loginAsGuest(page);
     await createUniverse(page, "QA-Univers-Corbeille");
 
@@ -28,6 +20,7 @@ test.describe("Corbeille — suppression profonde univers/livre", () => {
 
     // 1. Supprimer l'univers entier depuis la sidebar.
     await page.getByLabel(/Supprimer l’univers QA-Univers-Corbeille/).click();
+    await confirmAppDialog(page, "Supprimer");
 
     // L'univers a disparu de la barre latérale.
     await expect(page.getByText("QA-Univers-Corbeille", { exact: true })).not.toBeVisible();
@@ -59,12 +52,14 @@ test.describe("Corbeille — suppression profonde univers/livre", () => {
 
     // 7. Le supprimer de nouveau.
     await page.getByLabel(/Supprimer l’univers QA-Univers-Corbeille/).click();
+    await confirmAppDialog(page, "Supprimer");
     await expect(page.getByText("QA-Univers-Corbeille", { exact: true })).not.toBeVisible();
 
     // 8-9. Suppression définitive depuis la corbeille (confirmation acceptée
     // automatiquement) — impossible à restaurer ensuite.
     await page.getByText("Corbeille", { exact: true }).click();
     await page.getByLabel(/Supprimer définitivement QA-Univers-Corbeille/).click();
+    await confirmAppDialog(page, "Supprimer définitivement");
     await expect(page.getByText("QA-Univers-Corbeille", { exact: true })).not.toBeVisible();
     await page.getByRole("button", { name: "Fermer", exact: true }).click();
 
@@ -76,7 +71,6 @@ test.describe("Corbeille — suppression profonde univers/livre", () => {
   });
 
   test("suppression d'un livre : présence en corbeille, restauration avec son contenu", async ({ page }) => {
-    autoAcceptDialogs(page);
     await loginAsGuest(page);
     await createUniverse(page, "QA-Univers-Livre");
 
@@ -91,6 +85,7 @@ test.describe("Corbeille — suppression profonde univers/livre", () => {
     await expect(page.getByText("QA-Chapitre-Livre", { exact: true })).toBeVisible();
 
     await page.getByLabel(/Supprimer le livre QA-Livre-A-Supprimer/).click();
+    await confirmAppDialog(page, "Supprimer");
     await expect(page.getByText("QA-Livre-A-Supprimer", { exact: true })).not.toBeVisible();
 
     await page.getByText("Corbeille", { exact: true }).click();

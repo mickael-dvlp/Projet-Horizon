@@ -6,6 +6,10 @@ import { triggerDownload, sanitizeFilename } from "@/lib/download";
 import { countWordsFromHtml } from "@/lib/wordCount";
 import { addTask, toggleTask, removeTask } from "@/lib/tasks";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import Popover from "@/components/Popover";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import TaskList from "@/components/TaskList";
 import SceneListPanel from "@/components/SceneListPanel";
 import {
@@ -28,28 +32,34 @@ const HIGHLIGHT_COLORS = [
   "#e0e7ff", "#f3e8ff", "#fce7f3", "#ecfdf5", "#ffffff",
 ];
 
+// Fermeture à l'appui (mousedown) et non au clic, et boutons en
+// preventDefault : la sélection de texte de l'éditeur doit survivre jusqu'à
+// l'application de la couleur.
 function ColorPicker({ colors, onSelect, onClose, label }) {
   return (
-    <>
-      <div className="fixed inset-0 z-30" onMouseDown={onClose} />
-      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-40 animate-in fade-in zoom-in-95 duration-100">
-        <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">{label}</p>
-        <div className="grid grid-cols-5 gap-1.5">
-          {colors.map((color) => (
-            <button
-              key={color}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onSelect(color);
-              }}
-              className="w-6 h-6 rounded-full hover:scale-110 transition-transform ring-1 ring-black/10 hover:ring-2 hover:ring-indigo-400"
-              style={{ backgroundColor: color }}
-              title={color}
-            />
-          ))}
-        </div>
+    <Popover
+      onClose={onClose}
+      closeOnMouseDown
+      overlayClassName="z-30"
+      className="top-full left-1/2 -translate-x-1/2 mt-2 p-2.5 rounded-xl z-40"
+    >
+      <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">{label}</p>
+      <div className="grid grid-cols-5 gap-1.5">
+        {colors.map((color) => (
+          <button
+            key={color}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onSelect(color);
+            }}
+            className="w-6 h-6 rounded-full hover:scale-110 transition-transform ring-1 ring-black/10 hover:ring-2 hover:ring-indigo-400"
+            style={{ backgroundColor: color }}
+            title={color}
+            aria-label={`${label} ${color}`}
+          />
+        ))}
       </div>
-    </>
+    </Popover>
   );
 }
 
@@ -71,8 +81,7 @@ export default function MemoEditor({
   // être actifs en même temps.
   const [activePanel, setActivePanel] = useState(null); // "tasks" | "scenes" | null
   const [activeSceneId, setActiveSceneId] = useState(null);
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleValue, setTitleValue] = useState("");
+  const titleRename = useInlineRename((title) => saveUnit({ title }));
   const [panelWidth, setPanelWidth] = useState(512);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showTextColorPicker, setShowTextColorPicker] = useState(false);
@@ -84,7 +93,6 @@ export default function MemoEditor({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   const editorRef = useRef(null);
-  const titleInputRef = useRef(null);
   const resizingRef = useRef(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
@@ -184,26 +192,11 @@ export default function MemoEditor({
     setActivePanel("tasks");
   }, [taskFocus]);
 
-  useEffect(() => {
-    if (isEditingTitle) titleInputRef.current?.focus();
-  }, [isEditingTitle]);
-
-  // Échap ferme d'abord ce qui est ouvert par-dessus l'éditeur (sélecteur de
-  // couleur, édition du titre) avant de fermer l'éditeur lui-même — et passe
-  // par la confirmation habituelle si des modifications ne sont pas enregistrées.
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key !== "Escape") return;
-      if (showTextColorPicker) return setShowTextColorPicker(false);
-      if (showHighlightPicker) return setShowHighlightPicker(false);
-      if (showCloseConfirm) return setShowCloseConfirm(false);
-      if (isEditingTitle) return setIsEditingTitle(false);
-      if (isDirty) setShowCloseConfirm(true);
-      else onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showTextColorPicker, showHighlightPicker, showCloseConfirm, isEditingTitle, isDirty, onClose]);
+  // Échap ferme l'éditeur (avec la confirmation habituelle si des
+  // modifications ne sont pas enregistrées). Ce qui est ouvert par-dessus
+  // (sélecteurs de couleur, confirmation, renommage du titre) intercepte Échap
+  // en premier : cf. useEscapeKey et useInlineRename.
+  useEscapeKey(() => handleCloseClick());
 
   // Lit le contenu du DOM quand la zone éditable est montée (contenu live,
   // potentiellement non encore enregistré) ; sinon (ex. liste des scènes
@@ -259,14 +252,6 @@ export default function MemoEditor({
   const handleCloseClick = () => {
     if (isDirty) setShowCloseConfirm(true);
     else onClose();
-  };
-
-  const handleTitleSave = () => {
-    const trimmed = titleValue.trim();
-    if (trimmed && trimmed !== unit.title) {
-      saveUnit({ title: trimmed });
-    }
-    setIsEditingTitle(false);
   };
 
   const handleFormat = (command, value) => {
@@ -368,24 +353,15 @@ export default function MemoEditor({
                 )}
                 {isScene ? "Scène" : "Chapitre"}
               </p>
-              {isEditingTitle ? (
+              {titleRename.isEditing() ? (
                 <input
-                  ref={titleInputRef}
-                  value={titleValue}
-                  onChange={(e) => setTitleValue(e.target.value)}
-                  onBlur={handleTitleSave}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleTitleSave();
-                    if (e.key === "Escape") setIsEditingTitle(false);
-                  }}
+                  {...titleRename.inputProps}
+                  aria-label={isScene ? "Titre de la scène" : "Titre du chapitre"}
                   className="font-bold text-slate-900 dark:text-slate-100 text-base w-full border-b-2 border-indigo-300 dark:border-indigo-500/50 outline-none bg-transparent pb-0.5"
                 />
               ) : (
                 <h2
-                  onClick={() => {
-                    setTitleValue(unit.title || "");
-                    setIsEditingTitle(true);
-                  }}
+                  onClick={() => titleRename.start(undefined, unit.title)}
                   className="font-bold text-slate-900 dark:text-slate-100 text-base leading-snug truncate cursor-text hover:text-indigo-700 dark:hover:text-indigo-400 transition-colors"
                   title="Cliquer pour renommer"
                 >
@@ -610,40 +586,24 @@ export default function MemoEditor({
 
         {/* Confirmation fermeture sans sauvegarde */}
         {showCloseConfirm && (
-          <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm z-20 flex items-center justify-center">
-            <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl shadow-slate-200/60 dark:shadow-none p-6 mx-8 w-full max-w-sm text-center">
-              <div className="w-12 h-12 bg-amber-50 dark:bg-amber-500/10 text-amber-500 dark:text-amber-400 rounded-xl flex items-center justify-center text-xl mx-auto mb-4">
-                ⚠️
-              </div>
-              <p className="font-bold text-slate-800 dark:text-slate-100 mb-1">Modifications non enregistrées</p>
-              <p className="text-sm text-slate-400 dark:text-slate-500 mb-6 leading-relaxed">
-                Voulez-vous enregistrer vos modifications avant de fermer ?
-              </p>
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={() => {
-                    saveUnit({ content: getContent() });
-                    onClose();
-                  }}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-semibold text-sm transition-colors"
-                >
-                  Enregistrer et fermer
-                </button>
-                <button
-                  onClick={onClose}
-                  className="w-full bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 text-slate-500 dark:text-slate-300 px-4 py-2.5 rounded-xl font-semibold text-sm transition-colors"
-                >
-                  Fermer sans enregistrer
-                </button>
-                <button
-                  onClick={() => setShowCloseConfirm(false)}
-                  className="w-full text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 px-4 py-2 rounded-xl font-medium text-sm transition-colors"
-                >
-                  Annuler
-                </button>
-              </div>
-            </div>
-          </div>
+          <ConfirmDialog
+            inline
+            title="Modifications non enregistrées"
+            message="Voulez-vous enregistrer vos modifications avant de fermer ?"
+            onCancel={() => setShowCloseConfirm(false)}
+            actions={[
+              {
+                label: "Enregistrer et fermer",
+                variant: "primary",
+                onClick: () => {
+                  saveUnit({ content: getContent() });
+                  onClose();
+                },
+              },
+              { label: "Fermer sans enregistrer", variant: "neutral", onClick: onClose },
+              { label: "Annuler", variant: "ghost", onClick: () => setShowCloseConfirm(false) },
+            ]}
+          />
         )}
 
         {/* Footer */}

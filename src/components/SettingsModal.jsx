@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Image from "next/image";
 import {
   X,
@@ -22,6 +22,8 @@ import {
 import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
 import { MAX_BACKUP_BYTES } from "@/lib/backup";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Clair", icon: Sun },
@@ -145,14 +147,8 @@ export default function SettingsModal({
   const [importMessage, setImportMessage] = useState(null);
   const importInputRef = useRef(null);
   const [activeTab, setActiveTab] = useState("apparence");
-
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  const confirm = useConfirm();
+  useEscapeKey(onClose);
 
   const handleRetentionChange = (e) => {
     const raw = e.target.value;
@@ -185,14 +181,14 @@ export default function SettingsModal({
       setImportMessage("Fichier trop volumineux (10 Mo maximum).");
       return;
     }
-    if (
-      !window.confirm(
-        "Remplacer toutes vos données actuelles par cette sauvegarde ? " +
-          "Exportez d'abord vos données actuelles si vous souhaitez les conserver."
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Remplacer toutes vos données ?",
+      message:
+        "Les données actuelles seront remplacées par cette sauvegarde. Exportez-les d’abord si vous souhaitez les conserver.",
+      confirmLabel: "Remplacer",
+      danger: true,
+    });
+    if (!ok) return;
     let text;
     try {
       text = await file.text();

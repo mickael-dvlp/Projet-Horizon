@@ -1,12 +1,14 @@
 "use client";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { MoreHorizontal, Trash2, Edit2, Check, Flag, Calendar } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
-import { StatusDot, StatusMenu } from "./StatusPicker";
-import { PriorityDot, PriorityMenu } from "./PriorityPicker";
-import DeadlineField from "./DeadlineField";
+import { MoreHorizontal, Trash2, Edit2, Check, Calendar } from "lucide-react";
+import { useState } from "react";
+import { StatusDot } from "./StatusPicker";
+import { PriorityDot } from "./PriorityPicker";
+import Popover from "./Popover";
+import MetaMenu, { MenuSeparator } from "./MetaMenu";
 import { formatShortDate } from "@/lib/date";
+import { useInlineRename } from "@/hooks/useInlineRename";
 
 function CardSummary({ title, status, priority, deadline }) {
   return (
@@ -39,30 +41,12 @@ export function PageCardPreview({ title, status, priority, deadline }) {
   );
 }
 
-export default function PageCard({
-  id,
-  title,
-  status,
-  priority,
-  deadline,
-  onClick,
-  onDelete,
-  onRename,
-  onSetStatus,
-  onSetPriority,
-  onSetDeadline,
-}) {
+// Carte d'un chapitre dans un arc. `onUpdate(id, champs)` enregistre un
+// renommage ({ title }) ou un changement de statut/priorité/échéance.
+export default function PageCard({ id, title, status, priority, deadline, onClick, onDelete, onUpdate }) {
   const [showOptions, setShowOptions] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(title);
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (isEditing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [isEditing]);
+  const rename = useInlineRename((newTitle) => onUpdate(id, { title: newTitle }));
+  const isEditing = rename.isEditing();
 
   const {
     attributes,
@@ -89,17 +73,9 @@ export default function PageCard({
     cursor: isEditing ? "text" : "grab",
   };
 
-  // Repart toujours du titre actuel : il a pu changer depuis le montage
-  // (renommage dans l'éditeur), et l'ancienne valeur était sinon réappliquée.
-  const startEditing = () => {
-    setEditValue(title);
-    setIsEditing(true);
-  };
-
-  const handleSave = () => {
-    const trimmed = editValue.trim();
-    if (trimmed && trimmed !== title) onRename(id, trimmed);
-    setIsEditing(false);
+  const updateAndClose = (fields) => {
+    onUpdate(id, fields);
+    setShowOptions(false);
   };
 
   return (
@@ -131,14 +107,8 @@ export default function PageCard({
         <div className="flex-1 min-w-0">
           {isEditing ? (
             <input
-              ref={inputRef}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={handleSave}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSave();
-                if (e.key === "Escape") setIsEditing(false);
-              }}
+              {...rename.inputProps}
+              aria-label={`Nouveau nom du chapitre ${title}`}
               className="w-full bg-transparent font-medium text-slate-800 dark:text-slate-100 outline-none text-sm"
             />
           ) : (
@@ -149,7 +119,8 @@ export default function PageCard({
         <div className="relative shrink-0">
           {isEditing ? (
             <button
-              onClick={handleSave}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={rename.commit}
               aria-label="Confirmer le renommage"
               className="text-emerald-500 hover:text-emerald-600 p-0.5"
             >
@@ -169,82 +140,32 @@ export default function PageCard({
           )}
 
           {showOptions && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setShowOptions(false)} />
-              <div className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-20 py-1 animate-in fade-in zoom-in-95 duration-100">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEditing();
-                    setShowOptions(false);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium"
-                >
-                  <Edit2 size={12} /> Renommer
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete();
-                    setShowOptions(false);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 font-medium"
-                >
-                  <Trash2 size={12} /> Supprimer
-                </button>
-                {onSetStatus && (
-                  <>
-                    <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                    <p className="px-3 pt-0.5 pb-1 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                      <Flag size={10} /> Statut
-                    </p>
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <StatusMenu
-                        value={status}
-                        onChange={(next) => {
-                          onSetStatus(id, next);
-                          setShowOptions(false);
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
-                {onSetPriority && (
-                  <>
-                    <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                    <p className="px-3 pt-0.5 pb-1 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                      Priorité
-                    </p>
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <PriorityMenu
-                        value={priority}
-                        onChange={(next) => {
-                          onSetPriority(id, next);
-                          setShowOptions(false);
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
-                {onSetDeadline && (
-                  <>
-                    <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
-                    <div className="px-3 pt-0.5 pb-1.5">
-                      <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">
-                        Échéance
-                      </p>
-                      <DeadlineField
-                        value={deadline}
-                        onChange={(next) => {
-                          onSetDeadline(id, next);
-                          setShowOptions(false);
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
+            <Popover onClose={() => setShowOptions(false)} className="right-0 top-full mt-1 w-40 rounded-lg z-20 py-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowOptions(false);
+                  rename.start(undefined, title);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium"
+              >
+                <Edit2 size={12} /> Renommer
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                  setShowOptions(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 font-medium"
+              >
+                <Trash2 size={12} /> Supprimer
+              </button>
+              <MenuSeparator />
+              <div onClick={(e) => e.stopPropagation()}>
+                <MetaMenu status={status} priority={priority} deadline={deadline} onChange={updateAndClose} />
               </div>
-            </>
+            </Popover>
           )}
         </div>
       </div>

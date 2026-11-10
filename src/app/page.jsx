@@ -16,7 +16,7 @@ import { useKanbanDnD } from "@/hooks/useKanbanDnD";
 import { useTheme } from "@/hooks/useTheme";
 import { useElectronUpdater } from "@/hooks/useElectronUpdater";
 import { useElectronCloseConfirm } from "@/hooks/useElectronCloseConfirm";
-import CloseConfirmModal from "@/components/CloseConfirmModal";
+import ConfirmDialog, { useConfirm } from "@/components/ConfirmDialog";
 
 function EmptyState({ onCreate }) {
   const [isCreating, setIsCreating] = useState(false);
@@ -88,7 +88,8 @@ function EmptyState({ onCreate }) {
 }
 
 export default function Home() {
-  const logic = useKanbanLogic();
+  const confirm = useConfirm();
+  const logic = useKanbanLogic({ confirm });
   const dnd = useKanbanDnD(logic);
   const { theme, setTheme } = useTheme();
   const { sidebarBg, setSidebarBg, mainBg, setMainBg } = logic;
@@ -105,15 +106,27 @@ export default function Home() {
   // même en recliquant deux fois de suite sur la même tâche.
   const [taskFocus, setTaskFocus] = useState(null);
 
+  // Confirmation de fermeture demandée par Electron : peut survenir sur
+  // n'importe quel écran (chargement, connexion, espace de travail).
+  const closeConfirmDialog = closeConfirm.isOpen && (
+    <ConfirmDialog
+      title="Fermer Horizon ?"
+      message="Voulez-vous vraiment quitter l’application ? Les modifications en cours seront enregistrées avant la fermeture."
+      onCancel={closeConfirm.cancelClose}
+      actions={[
+        { label: "Annuler", variant: "primary", onClick: closeConfirm.cancelClose },
+        { label: "Fermer l’application", variant: "neutral", onClick: closeConfirm.confirmClose },
+      ]}
+    />
+  );
+
   if (!logic.mounted || logic.loading) {
     return (
       <>
         <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500 italic">
           Chargement...
         </div>
-        {closeConfirm.isOpen && (
-          <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
-        )}
+        {closeConfirmDialog}
       </>
     );
   }
@@ -126,12 +139,15 @@ export default function Home() {
           setIsAuthModalOpen={logic.setIsAuthModalOpen}
           onGuestLogin={logic.handleGuestLogin}
         />
-        {closeConfirm.isOpen && (
-          <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
-        )}
+        {closeConfirmDialog}
       </>
     );
   }
+
+  const openDashboard = () => {
+    setActiveKbFile(null);
+    setIsDashboardOpen(true);
+  };
 
   const activeSubProjectObj = logic.subProjects[logic.activeProjectId]?.find(
     (sp) => sp.id === logic.activeSubProjectId
@@ -186,10 +202,7 @@ export default function Home() {
           logic.handleSelectSubProject(projectId, subProjectId);
         }}
         isDashboardOpen={isDashboardOpen}
-        onOpenDashboard={() => {
-          setActiveKbFile(null);
-          setIsDashboardOpen(true);
-        }}
+        onOpenDashboard={openDashboard}
         onCreate={logic.handleCreateProject}
         onCreateSubProject={logic.handleCreateSubProject}
         onUpdateProject={logic.handleRenameProject}
@@ -252,7 +265,6 @@ export default function Home() {
               columns={logic.columns}
               setActivePage={logic.setActivePage}
               addPage={logic.addPage}
-              setColumns={logic.setColumns}
               deletePage={logic.deletePage}
               draggedItem={logic.draggedItem}
               addColumn={logic.addColumn}
@@ -262,16 +274,11 @@ export default function Home() {
               handleDragEnd={dnd.handleDragEnd}
               announcements={dnd.announcements}
               screenReaderInstructions={dnd.screenReaderInstructions}
-              onRename={(id, newName) => logic.handleSavePage(id, { title: newName })}
+              onUpdatePage={logic.handleSavePage}
+              onUpdateColumn={logic.updateColumn}
               onDeleteColumn={logic.deleteColumn}
               hasMainBg={!!mainBg}
-              onOpenDashboard={() => {
-                setActiveKbFile(null);
-                setIsDashboardOpen(true);
-              }}
-              onSetPageStatus={(id, status) => logic.handleSavePage(id, { status })}
-              onSetPagePriority={(id, priority) => logic.handleSavePage(id, { priority })}
-              onSetPageDeadline={(id, deadline) => logic.handleSavePage(id, { deadline })}
+              onOpenDashboard={openDashboard}
               projectName={activeSubName}
               projectSuperName={activeProjectName}
               subProjectTasks={activeSubProjectObj?.tasks || []}
@@ -350,9 +357,7 @@ export default function Home() {
 
       <Toast toast={logic.toast} onDismiss={logic.dismissToast} />
 
-      {closeConfirm.isOpen && (
-        <CloseConfirmModal onConfirm={closeConfirm.confirmClose} onCancel={closeConfirm.cancelClose} />
-      )}
+      {closeConfirmDialog}
     </div>
   );
 }

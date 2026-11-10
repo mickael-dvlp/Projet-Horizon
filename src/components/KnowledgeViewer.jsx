@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, FileText, Pencil, Check } from "lucide-react";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 // Échappe les caractères HTML avant le rendu markdown
 const esc = (s) =>
@@ -80,6 +82,7 @@ const formatDate = (ts) =>
 
 export default function KnowledgeViewer({ file, onClose, onUpdateContent, onToast }) {
   useRestoreFocus();
+  const confirm = useConfirm();
   const [isEditing, setIsEditing] = useState(false);
   const [draftContent, setDraftContent] = useState(file.content || "");
   const html = renderMarkdown(file.content);
@@ -91,17 +94,23 @@ export default function KnowledgeViewer({ file, onClose, onUpdateContent, onToas
 
   // Échap, Annuler ou un clic sur le fond jetaient le brouillon sans
   // prévenir : on demande confirmation dès qu'il diffère du contenu enregistré.
-  const confirmDiscard = () =>
+  const confirmDiscard = async () =>
     !isEditing ||
     draftContent === (file.content || "") ||
-    window.confirm("Abandonner les modifications non enregistrées de cette fiche ?");
+    confirm({
+      title: "Abandonner les modifications ?",
+      message: "Les changements non enregistrés de cette fiche seront perdus.",
+      confirmLabel: "Abandonner",
+      cancelLabel: "Continuer l’édition",
+      danger: true,
+    });
 
-  const handleCancelEdit = () => {
-    if (confirmDiscard()) setIsEditing(false);
+  const handleCancelEdit = async () => {
+    if (await confirmDiscard()) setIsEditing(false);
   };
 
-  const handleClose = () => {
-    if (confirmDiscard()) onClose();
+  const handleClose = async () => {
+    if (await confirmDiscard()) onClose();
   };
 
   const handleSaveEdit = () => {
@@ -110,26 +119,17 @@ export default function KnowledgeViewer({ file, onClose, onUpdateContent, onToas
     onToast?.("success", "Fiche mise à jour.");
   };
 
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key !== "Escape") return;
-      if (isEditing) handleCancelEdit();
-      else onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose, isEditing, draftContent, file.content]);
+  useEscapeKey(() => (isEditing ? handleCancelEdit() : onClose()));
 
   return (
     <>
       {/* Backdrop au-dessus du MemoEditor */}
       <div
-        className="fixed inset-0 bg-slate-900/30 z-[55] animate-in fade-in duration-200"
+        className="fixed inset-0 bg-slate-900/30 z-55 animate-in fade-in duration-200"
         onClick={handleClose}
       />
 
-      <div className="fixed inset-y-0 right-0 w-full sm:w-[560px] max-w-full sm:max-w-[90vw] bg-white dark:bg-slate-900 h-full flex flex-col shadow-2xl z-[60] animate-in slide-in-from-right duration-300 border-l border-slate-200 dark:border-slate-700 pr-[env(safe-area-inset-right)]">
+      <div className="fixed inset-y-0 right-0 w-full sm:w-140 max-w-full sm:max-w-[90vw] bg-white dark:bg-slate-900 h-full flex flex-col shadow-2xl z-60 animate-in slide-in-from-right duration-300 border-l border-slate-200 dark:border-slate-700 pr-[env(safe-area-inset-right)]">
         {/* Header */}
         <div className="relative px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between md:justify-center gap-4 shrink-0">
           <div className="flex items-start gap-3 min-w-0 flex-1 md:flex-none md:flex-col md:items-center md:text-center">

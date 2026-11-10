@@ -1,5 +1,6 @@
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import Providers from "./providers";
 
 const jakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -46,7 +47,7 @@ export default function RootLayout({ children }) {
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body className="bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

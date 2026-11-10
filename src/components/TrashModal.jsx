@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import {
   Trash2,
   RotateCcw,
@@ -11,6 +10,8 @@ import {
   Globe,
 } from "lucide-react";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 const TYPE_META = {
   column: { label: "Arc", icon: FolderOpen, className: "bg-amber-50 dark:bg-amber-500/10 text-amber-500 dark:text-amber-400" },
@@ -29,13 +30,8 @@ export default function TrashModal({
   onClose,
 }) {
   useRestoreFocus();
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
+  const confirm = useConfirm();
 
   const resolveOrigin = (item) => {
     const project = projects.find((p) => p.id === item.projectId);
@@ -115,10 +111,14 @@ export default function TrashModal({
                       <RotateCcw size={18} />
                     </button>
                     <button
-                      onClick={() => {
-                        if (window.confirm(`Supprimer définitivement "${itemName}" ? Cette action est irréversible.`)) {
-                          onDelete(item.trashId);
-                        }
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Supprimer définitivement « ${itemName} » ?`,
+                          message: "Cette action est irréversible.",
+                          confirmLabel: "Supprimer définitivement",
+                          danger: true,
+                        });
+                        if (ok) onDelete(item.trashId);
                       }}
                       aria-label={`Supprimer définitivement ${itemName}`}
                       className="p-2 text-red-400 dark:text-red-400/80 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"

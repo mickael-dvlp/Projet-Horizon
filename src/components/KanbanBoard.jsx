@@ -20,17 +20,14 @@ export default function KanbanBoard({
   screenReaderInstructions,
   setActivePage,
   addPage,
-  setColumns,
   deletePage,
   draggedItem,
   addColumn,
   projectName,
   projectSuperName,
-  onRename: onRenamePage,
+  onUpdatePage,
+  onUpdateColumn,
   onDeleteColumn,
-  onSetPageStatus,
-  onSetPagePriority,
-  onSetPageDeadline,
   subProjectTasks = [],
   onAddSubProjectTask,
   onToggleSubProjectTask,
@@ -191,24 +188,10 @@ export default function KanbanBoard({
                   {...col}
                   onPageClick={setActivePage}
                   onAddPage={(title) => addPage(col.id, title)}
-                  onRenamePage={onRenamePage}
+                  onUpdate={(fields) => onUpdateColumn(col.id, fields)}
                   onDeleteColumn={() => onDeleteColumn(col.id)}
-                  onSetPageStatus={onSetPageStatus}
-                  onSetPagePriority={onSetPagePriority}
-                  onSetPageDeadline={onSetPageDeadline}
-                  onRename={(newName) =>
-                    setColumns((prev) =>
-                      prev.map((c) =>
-                        c.id === col.id ? { ...c, title: newName } : c,
-                      ),
-                    )
-                  }
+                  onUpdatePage={onUpdatePage}
                   onDeletePage={deletePage}
-                  onChangeColor={(color) =>
-                    setColumns((prev) =>
-                      prev.map((c) => (c.id === col.id ? { ...c, color } : c)),
-                    )
-                  }
                   autoEdit={col.id === justCreatedColumnId}
                   onAutoEditHandled={() => setJustCreatedColumnId(null)}
                 />

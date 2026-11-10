@@ -8,46 +8,52 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { MoreHorizontal, Pencil, Plus, Palette, Trash2 } from "lucide-react";
 import PageCard from "./PageCard";
+import Popover from "./Popover";
+import { MenuSeparator } from "./MetaMenu";
 import { colorConfig, swatchColors } from "@/lib/arcColors";
 import { useCreateForm } from "@/hooks/useCreateForm";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import { useConfirm } from "@/components/ConfirmDialog";
 
+// Un arc du tableau. `onUpdate(champs)` modifie l'arc ({ title } ou
+// { color }) ; `onUpdatePage(id, champs)` modifie l'un de ses chapitres.
 export default function Column({
   id,
   title,
   pages,
   color = "slate",
   onAddPage,
-  onRename,
-  onDeletePage,
-  onPageClick,
-  onChangeColor,
-  onRenamePage,
+  onUpdate,
   onDeleteColumn,
-  onSetPageStatus,
-  onSetPagePriority,
-  onSetPageDeadline,
+  onPageClick,
+  onUpdatePage,
+  onDeletePage,
   autoEdit = false,
   onAutoEditHandled,
 }) {
+  const confirm = useConfirm();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(title);
   const [isAddingPage, setIsAddingPage] = useState(false);
-  const inputRef = useRef(null);
   const newPageRef = useRef(null);
   const addPageButtonRef = useRef(null);
+  const rename = useInlineRename((newTitle) => onUpdate({ title: newTitle }));
 
   const {
     value: newPageTitle,
     setValue: setNewPageTitle,
     submit: handleConfirmAddPage,
-    cancel: handleCancelAddPage,
     handleKeyDown: handleAddPageKeyDown,
   } = useCreateForm(onAddPage, {
     onClose: () => setIsAddingPage(false),
     triggerRef: addPageButtonRef,
   });
 
+  // L'en-tête est le déclencheur du déplacement : le déclarer comme tel évite
+  // qu'un Espace tapé dans le champ de renommage ou sur le bouton d'options
+  // (tous deux dans l'en-tête) ne lance un déplacement au clavier.
+  // Pas de useDroppable séparé : useSortable enregistre déjà la colonne
+  // entière comme zone de dépôt sous cet id (y compris quand elle est vide).
+  // Un second droppable au même id entrait en conflit avec le premier.
   const {
     attributes,
     listeners,
@@ -57,12 +63,6 @@ export default function Column({
     transition,
     isDragging,
   } = useSortable({ id, data: { type: "Column" } });
-  // L'en-tête est le déclencheur du déplacement : le déclarer comme tel évite
-  // qu'un Espace tapé dans le champ de renommage ou sur le bouton d'options
-  // (tous deux dans l'en-tête) ne lance un déplacement au clavier.
-  // Pas de useDroppable séparé : useSortable enregistre déjà la colonne
-  // entière comme zone de dépôt sous cet id (y compris quand elle est vide).
-  // Un second droppable au même id entrait en conflit avec le premier.
 
   const style = {
     transform: CSS.Translate.toString(transform),
@@ -73,21 +73,8 @@ export default function Column({
   const colors = colorConfig[color] || colorConfig.slate;
 
   useEffect(() => {
-    if (isEditing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [isEditing]);
-
-  // Repart toujours du titre actuel (il a pu changer depuis le montage).
-  const startEditing = () => {
-    setEditValue(title);
-    setIsEditing(true);
-  };
-
-  useEffect(() => {
     if (autoEdit) {
-      startEditing();
+      rename.start(undefined, title);
       onAutoEditHandled?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,12 +83,6 @@ export default function Column({
   useEffect(() => {
     if (isAddingPage) newPageRef.current?.focus();
   }, [isAddingPage]);
-
-  const handleSave = () => {
-    const trimmed = editValue.trim();
-    if (trimmed && trimmed !== title) onRename(trimmed);
-    setIsEditing(false);
-  };
 
   return (
     <div
@@ -117,19 +98,9 @@ export default function Column({
           className="flex items-center justify-between cursor-grab active:cursor-grabbing px-1 relative"
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            {isEditing ? (
+            {rename.isEditing() ? (
               <input
-                ref={inputRef}
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onBlur={handleSave}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSave();
-                  if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setIsEditing(false);
-                  }
-                }}
+                {...rename.inputProps}
                 onClick={(e) => e.stopPropagation()}
                 aria-label={`Nouveau nom de l’arc ${title}`}
                 className="font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-500/50 rounded-md px-2 py-0.5 outline-none w-full text-sm shadow-sm"
@@ -160,56 +131,57 @@ export default function Column({
           </button>
 
           {isMenuOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setIsMenuOpen(false)}
-              />
-              <div className="absolute right-0 top-8 w-52 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-20 py-1.5 animate-in fade-in zoom-in-95 duration-100">
-                <button
-                  onClick={() => {
-                    startEditing();
-                    setIsMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-                >
-                  <Pencil size={14} /> Modifier le nom
-                </button>
-                <button
-                  onClick={() => {
-                    onDeleteColumn();
-                    setIsMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
-                >
-                  <Trash2 size={14} /> Supprimer l&apos;arc
-                </button>
-                <div className="h-px bg-slate-100 dark:bg-slate-700 my-1.5 mx-3" />
-                <div className="px-4 py-1.5">
-                  <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <Palette size={10} /> Couleur
-                  </p>
-                  <div className="flex gap-2">
-                    {Object.entries(swatchColors).map(([name, hex]) => (
-                      <button
-                        key={name}
-                        onClick={() => {
-                          onChangeColor(name);
-                          setIsMenuOpen(false);
-                        }}
-                        className={`w-5 h-5 rounded-full transition-transform hover:scale-110 ${
-                          color === name
-                            ? "ring-2 ring-offset-1 dark:ring-offset-slate-800 ring-slate-400"
-                            : ""
-                        }`}
-                        style={{ backgroundColor: hex }}
-                        title={name}
-                      />
-                    ))}
-                  </div>
+            <Popover onClose={() => setIsMenuOpen(false)} className="right-0 top-8 w-52 rounded-xl z-20 py-1.5">
+              <button
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  rename.start(undefined, title);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                <Pencil size={14} /> Modifier le nom
+              </button>
+              <button
+                onClick={async () => {
+                  setIsMenuOpen(false);
+                  const ok = await confirm({
+                    title: `Supprimer l’arc « ${title} » ?`,
+                    message: "L’arc et ses chapitres seront placés dans la corbeille.",
+                    confirmLabel: "Supprimer",
+                    danger: true,
+                  });
+                  if (ok) onDeleteColumn();
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+              >
+                <Trash2 size={14} /> Supprimer l&apos;arc
+              </button>
+              <MenuSeparator />
+              <div className="px-4 py-1.5">
+                <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Palette size={10} /> Couleur
+                </p>
+                <div className="flex gap-2">
+                  {Object.entries(swatchColors).map(([name, hex]) => (
+                    <button
+                      key={name}
+                      onClick={() => {
+                        onUpdate({ color: name });
+                        setIsMenuOpen(false);
+                      }}
+                      className={`w-5 h-5 rounded-full transition-transform hover:scale-110 ${
+                        color === name
+                          ? "ring-2 ring-offset-1 dark:ring-offset-slate-800 ring-slate-400"
+                          : ""
+                      }`}
+                      style={{ backgroundColor: hex }}
+                      title={name}
+                      aria-label={`Couleur ${name}`}
+                    />
+                  ))}
                 </div>
               </div>
-            </>
+            </Popover>
           )}
         </div>
 
@@ -227,11 +199,8 @@ export default function Column({
                 priority={page.priority}
                 deadline={page.deadline}
                 onClick={() => onPageClick(page)}
-                onRename={onRenamePage}
                 onDelete={() => onDeletePage(page.id)}
-                onSetStatus={onSetPageStatus}
-                onSetPriority={onSetPagePriority}
-                onSetDeadline={onSetPageDeadline}
+                onUpdate={onUpdatePage}
               />
             ))}
           </SortableContext>
