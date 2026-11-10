@@ -242,7 +242,7 @@ export default function Sidebar({
           </div>
           <button
             onClick={onLogout}
-            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all rounded-md"
+            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all rounded-md"
             title="Déconnexion"
             aria-label="Déconnexion"
           >
@@ -337,7 +337,7 @@ export default function Sidebar({
                     >
                       {project.name}
                     </button>
-                    <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                    <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -422,7 +422,7 @@ export default function Sidebar({
                             </button>
                           )}
                           {editingSubProject?.id !== sub.id && (
-                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -673,7 +673,7 @@ export default function Sidebar({
                           />
                           <span className="truncate pr-14" title={file.name}>{file.name}</span>
                         </button>
-                        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();

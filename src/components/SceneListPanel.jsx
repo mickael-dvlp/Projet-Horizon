@@ -98,7 +98,7 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
                 <button
                   onClick={() => setMenuOpenId(menuOpenId === scene.id ? null : scene.id)}
                   aria-label={`Options de la scène ${scene.title || "Sans titre"}`}
-                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1.5 mr-2 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-all shrink-0"
+                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 p-1.5 mr-2 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-all shrink-0"
                   title="Options"
                 >
                   <MoreHorizontal size={16} />

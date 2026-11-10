@@ -75,7 +75,7 @@ export default function TaskList({ tasks = [], onAdd, onToggle, onDelete, highli
           <button
             onClick={() => onDelete(task.id)}
             aria-label={`Supprimer la tâche "${task.label}"`}
-            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-0.5 text-slate-300 dark:text-slate-600 hover:text-red-500 transition-all shrink-0"
+            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 p-0.5 text-slate-300 dark:text-slate-600 hover:text-red-500 transition-all shrink-0"
             title="Supprimer"
           >
             <X size={13} />

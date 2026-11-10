@@ -5,7 +5,6 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { MoreHorizontal, Pencil, Plus, Palette, Trash2 } from "lucide-react";
 import PageCard from "./PageCard";
@@ -53,12 +52,17 @@ export default function Column({
     attributes,
     listeners,
     setNodeRef: setSortableRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
   } = useSortable({ id, data: { type: "Column" } });
-
-  const { setNodeRef: setDroppableRef } = useDroppable({ id });
+  // L'en-tête est le déclencheur du déplacement : le déclarer comme tel évite
+  // qu'un Espace tapé dans le champ de renommage ou sur le bouton d'options
+  // (tous deux dans l'en-tête) ne lance un déplacement au clavier.
+  // Pas de useDroppable séparé : useSortable enregistre déjà la colonne
+  // entière comme zone de dépôt sous cet id (y compris quand elle est vide).
+  // Un second droppable au même id entrait en conflit avec le premier.
 
   const style = {
     transform: CSS.Translate.toString(transform),
@@ -75,9 +79,15 @@ export default function Column({
     }
   }, [isEditing]);
 
+  // Repart toujours du titre actuel (il a pu changer depuis le montage).
+  const startEditing = () => {
+    setEditValue(title);
+    setIsEditing(true);
+  };
+
   useEffect(() => {
     if (autoEdit) {
-      setIsEditing(true);
+      startEditing();
       onAutoEditHandled?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,8 +98,8 @@ export default function Column({
   }, [isAddingPage]);
 
   const handleSave = () => {
-    if (editValue.trim()) onRename(editValue);
-    else setEditValue(title);
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== title) onRename(trimmed);
     setIsEditing(false);
   };
 
@@ -101,6 +111,7 @@ export default function Column({
     >
       <div className="flex flex-col gap-3 p-3 flex-1">
         <div
+          ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
           className="flex items-center justify-between cursor-grab active:cursor-grabbing px-1 relative"
@@ -116,7 +127,6 @@ export default function Column({
                   if (e.key === "Enter") handleSave();
                   if (e.key === "Escape") {
                     e.stopPropagation();
-                    setEditValue(title);
                     setIsEditing(false);
                   }
                 }}
@@ -158,7 +168,7 @@ export default function Column({
               <div className="absolute right-0 top-8 w-52 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-20 py-1.5 animate-in fade-in zoom-in-95 duration-100">
                 <button
                   onClick={() => {
-                    setIsEditing(true);
+                    startEditing();
                     setIsMenuOpen(false);
                   }}
                   className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
@@ -203,10 +213,7 @@ export default function Column({
           )}
         </div>
 
-        <div
-          ref={setDroppableRef}
-          className="flex flex-col gap-2 min-h-30 max-h-80 overflow-y-auto custom-scrollbar pr-1"
-        >
+        <div className="flex flex-col gap-2 min-h-30 max-h-80 overflow-y-auto custom-scrollbar pr-1">
           <SortableContext
             items={pages.map((p) => p.id)}
             strategy={verticalListSortingStrategy}

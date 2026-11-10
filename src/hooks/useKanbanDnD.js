@@ -1,11 +1,27 @@
 // Ce hook gère la logique de drag-and-drop pour les colonnes et les pages du tableau Kanban. Il utilise les capteurs de dnd-kit pour détecter les interactions de l'utilisateur et met à jour l'état des colonnes et des pages en conséquence.
-import { PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
+import { KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+
+// Déplacement au clavier : Espace prend/dépose, flèches déplacent, Échap
+// annule. Entrée reste libre pour ouvrir un chapitre (cf. PageCard).
+const KEYBOARD_CODES = { start: ["Space"], cancel: ["Escape"], end: ["Space"] };
+
+// Consigne lue par les lecteurs d'écran sur chaque élément déplaçable (la
+// valeur par défaut de dnd-kit est en anglais).
+const SCREEN_READER_INSTRUCTIONS = {
+  draggable:
+    "Pour déplacer cet élément, appuyez sur Espace, utilisez les flèches pour le déplacer, " +
+    "puis Espace pour le déposer ou Échap pour annuler.",
+};
 
 export function useKanbanDnD(logic) {
-  // Configuration des capteurs (clic/toucher)
+  // Configuration des capteurs (souris/toucher et clavier)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: KEYBOARD_CODES,
+    }),
   );
 
   // Fonction interne pour savoir dans quelle colonne se trouve un élément
@@ -133,5 +149,12 @@ export function useKanbanDnD(logic) {
     onDragCancel: ({ active }) => `Déplacement de ${describe(active.id)} annulé.`,
   };
 
-  return { sensors, handleDragStart, handleDragOver, handleDragEnd, announcements };
+  return {
+    sensors,
+    handleDragStart,
+    handleDragOver,
+    handleDragEnd,
+    announcements,
+    screenReaderInstructions: SCREEN_READER_INSTRUCTIONS,
+  };
 }

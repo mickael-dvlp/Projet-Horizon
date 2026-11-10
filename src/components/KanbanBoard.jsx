@@ -5,7 +5,7 @@ import {
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import Column from "@/components/Column";
-import PageCard from "@/components/PageCard";
+import { PageCardPreview } from "@/components/PageCard";
 import TaskList from "@/components/TaskList";
 import PlanView from "@/components/views/PlanView";
 import { Plus, ListTodo, LayoutGrid, ListTree } from "lucide-react";
@@ -17,6 +17,7 @@ export default function KanbanBoard({
   handleDragOver,
   handleDragEnd,
   announcements,
+  screenReaderInstructions,
   setActivePage,
   addPage,
   setColumns,
@@ -56,7 +57,10 @@ export default function KanbanBoard({
   return (
     <DndContext
       sensors={sensors}
-      announcements={announcements}
+      // dnd-kit ne lit les annonces que dans `accessibility` : passées en
+      // prop directe, elles étaient ignorées au profit des annonces anglaises
+      // par défaut (ids bruts).
+      accessibility={{ announcements, screenReaderInstructions }}
       collisionDetection={closestCorners}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
@@ -221,7 +225,12 @@ export default function KanbanBoard({
               {draggedItem.title}
             </div>
           ) : (
-            <PageCard title={draggedItem.title} id={draggedItem.id} />
+            <PageCardPreview
+              title={draggedItem.title}
+              status={draggedItem.status}
+              priority={draggedItem.priority}
+              deadline={draggedItem.deadline}
+            />
           ))}
       </DragOverlay>
     </DndContext>
