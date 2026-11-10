@@ -5,6 +5,7 @@ import { useTrash } from "@/hooks/useTrash";
 import { htmlToMarkdown } from "@/lib/htmlToMarkdown";
 import { buildUniverseSummary } from "@/lib/universeSummary";
 import { triggerDownload, sanitizeFilename } from "@/lib/download";
+import { restoreTrashItem } from "@/lib/trashRestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, setDoc, onSnapshot } from "firebase/firestore";
 import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
@@ -12,8 +13,23 @@ import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
 // Marqueur localStorage distinct des données elles-mêmes : indique qu'une
 // session invité était active, pour la restaurer après un rechargement.
 const GUEST_SESSION_KEY = "horizon-guest-session";
+const GUEST_DATA_KEY = "kanban-data-guest";
+const userDataKey = (uid) => `kanban-data-${uid}`;
 
-const DEFAULT_SETTINGS = { trashRetentionDays: null, sidebarBg: null, mainBg: null };
+// 30 jours par défaut pour les nouveaux comptes : une corbeille jamais purgée
+// grossit indéfiniment (elle garde le texte intégral des chapitres
+// supprimés) et rapproche le document Firestore de sa limite de taille.
+// Un réglage déjà enregistré (y compris "Jamais" = null) reste prioritaire.
+const DEFAULT_SETTINGS = { trashRetentionDays: 30, sidebarBg: null, mainBg: null };
+
+const SAVE_DEBOUNCE_MS = 500;
+
+// Limites de stockage : 1 Mio par document Firestore (compte connecté), et
+// ~5 millions de caractères pour le localStorage de Chromium (invité).
+const FIRESTORE_DOC_LIMIT = 1_048_576;
+const LOCAL_STORAGE_LIMIT = 5_000_000;
+const USAGE_WARNING_RATIO = 0.8;
+const USAGE_CRITICAL_RATIO = 0.95;
 
 // Anciennes clés localStorage (fonds d'écran stockés uniquement sur l'appareil,
 // jamais synchronisés) : à ne lire qu'une fois, pour reprendre un choix déjà
@@ -35,6 +51,26 @@ function stableStringify(value) {
   }
   return JSON.stringify(value);
 }
+
+// Empreinte servant à détecter un changement à sauvegarder. `lastActive` en
+// est exclu : la navigation seule ne doit déclencher aucune écriture, et deux
+// appareils ouverts sur des livres différents se renverraient sinon leur
+// position en boucle à chaque synchronisation.
+function syncFingerprint(data) {
+  const { lastActive, ...content } = data;
+  return stableStringify(content);
+}
+
+function computeStorageUsage(serialized, isGuest) {
+  const used = isGuest ? serialized.length : new TextEncoder().encode(serialized).length;
+  const limit = isGuest ? LOCAL_STORAGE_LIMIT : FIRESTORE_DOC_LIMIT;
+  const ratio = used / limit;
+  const level =
+    ratio >= USAGE_CRITICAL_RATIO ? "critical" : ratio >= USAGE_WARNING_RATIO ? "warning" : "ok";
+  return { used, limit, ratio, level };
+}
+
+const USAGE_LEVEL_RANK = { ok: 0, warning: 1, critical: 2 };
 
 export function useKanbanLogic() {
   const [mounted, setMounted] = useState(false);
@@ -63,19 +99,21 @@ export function useKanbanLogic() {
   const [activePage, setActivePage] = useState(null);
   const [draggedItem, setDraggedItem] = useState(null);
   const [toast, setToast] = useState(null);
+  const [storageUsage, setStorageUsage] = useState(null);
 
   const showToast = (type, message) => setToast({ type, message, id: Date.now() });
   const dismissToast = () => setToast(null);
 
-  // Sérialise les écritures Firestore/localStorage : si une écriture est déjà
-  // en vol quand l'état change à nouveau, on mémorise seulement les données
-  // les plus récentes au lieu de lancer une seconde requête concurrente —
-  // évite qu'une écriture plus ancienne, résolue plus tard sur le réseau
-  // (ex. lors d'une reconnexion), n'écrase une écriture plus récente et ne
-  // fasse "disparaître" un champ modifié entre-temps.
-  const savingRef = useRef(false);
-  const pendingDataRef = useRef(null);
+  // Sauvegarde en attente (debounce) : données, empreinte et destination
+  // (compte ou invité) figées au moment du changement, pour pouvoir être
+  // écrites plus tard — ou immédiatement via flushSave — sans dépendre de
+  // l'état React du moment.
+  const pendingSaveRef = useRef(null);
   const saveTimerRef = useRef(null);
+  const usageLevelRef = useRef("ok");
+  // Navigation courante, lisible depuis l'écoute Firestore (enregistrée une
+  // seule fois au montage, donc sans accès direct à l'état à jour).
+  const activeRef = useRef({ activeProjectId: null, activeSubProjectId: null, activePage: null });
   // Écoute Firestore active (onSnapshot) pour l'utilisateur courant, à fermer
   // dès qu'elle change (changement de compte, déconnexion, démontage).
   const docUnsubRef = useRef(null);
@@ -88,7 +126,17 @@ export function useKanbanLogic() {
   const columns = allProjectsData[activeSubProjectId] || [];
   const knowledgeBase = knowledgeBaseByProject[activeProjectId] || [];
 
-  const applyData = (rawData) => {
+  useEffect(() => {
+    activeRef.current = { activeProjectId, activeSubProjectId, activePage };
+  });
+
+  // `isRemote` : mise à jour reçue d'un autre appareil (et non chargement
+  // initial). La navigation locale est alors conservée — le "lastActive"
+  // enregistré par l'autre appareil n'a pas à faire changer de livre celui-ci,
+  // ce qui laissait l'éditeur ouvert sur un chapitre d'un autre livre et
+  // perdait silencieusement ses sauvegardes.
+  // `guest` : données du stockage invité (limite de taille différente).
+  const applyData = (rawData, { isRemote = false, guest = false } = {}) => {
     let data = rawData;
 
     // Migration : ancien format (allData keyed by projectId, pas de subProjects)
@@ -123,32 +171,59 @@ export function useKanbanLogic() {
     setTrashItems(loadedTrash);
     setSettings(loadedSettings);
 
-    let lastActive = null;
-    if (data.lastActive?.subProjectId) {
-      lastActive = { projectId: data.lastActive.projectId, subProjectId: data.lastActive.subProjectId };
-      setActiveProjectId(lastActive.projectId);
-      setActiveSubProjectId(lastActive.subProjectId);
+    const firstBookOf = (projectId) => loadedSubProjects[projectId]?.[0]?.id || null;
+
+    if (isRemote) {
+      const { activeProjectId: curProj, activeSubProjectId: curSub, activePage: curPage } =
+        activeRef.current;
+      const projStillExists = !!curProj && loadedProjects.some((p) => p.id === curProj);
+      const subStillExists =
+        !!curSub && Object.values(loadedSubProjects).some((subs) => subs.some((s) => s.id === curSub));
+
+      if ((curProj && !projStillExists) || (curSub && !subStillExists)) {
+        const fallbackProj = projStillExists ? curProj : loadedProjects[0]?.id || null;
+        setActiveProjectId(fallbackProj);
+        setActiveSubProjectId(firstBookOf(fallbackProj));
+        if (curPage) {
+          setActivePage(null);
+          showToast("error", "Le livre ouvert a été supprimé depuis un autre appareil.");
+        }
+      } else if (
+        curPage &&
+        !(loadedData[curSub] || []).some((c) => c.pages.some((p) => p.id === curPage.id))
+      ) {
+        setActivePage(null);
+        showToast("error", "Le chapitre ouvert a été supprimé ou déplacé depuis un autre appareil.");
+      }
+    } else if (data.lastActive?.subProjectId) {
+      setActiveProjectId(data.lastActive.projectId);
+      setActiveSubProjectId(data.lastActive.subProjectId);
     } else if (loadedProjects[0]) {
-      const firstProj = loadedProjects[0];
-      const firstSub = loadedSubProjects[firstProj.id]?.[0];
-      lastActive = { projectId: firstProj.id, subProjectId: firstSub?.id || null };
-      setActiveProjectId(lastActive.projectId);
-      setActiveSubProjectId(lastActive.subProjectId);
+      setActiveProjectId(loadedProjects[0].id);
+      setActiveSubProjectId(firstBookOf(loadedProjects[0].id));
     }
 
-    // Sans projet, l'effet de sauvegarde ne peut de toute façon rien écrire
-    // (garde `projects.length === 0`) : pas besoin d'une référence exacte.
-    if (loadedProjects.length > 0) {
-      lastSyncedRef.current = stableStringify({
-        projects: loadedProjects,
-        subProjects: loadedSubProjects,
-        allData: loadedData,
-        knowledgeBaseByProject: loadedKb,
-        arcsByProject: loadedArcs,
-        lastActive,
-        trash: loadedTrash,
-        settings: loadedSettings,
-      });
+    lastSyncedRef.current = syncFingerprint({
+      projects: loadedProjects,
+      subProjects: loadedSubProjects,
+      allData: loadedData,
+      knowledgeBaseByProject: loadedKb,
+      arcsByProject: loadedArcs,
+      trash: loadedTrash,
+      settings: loadedSettings,
+    });
+    trackStorageUsage(lastSyncedRef.current, guest);
+  };
+
+  // Charge une copie locale (localStorage) ; données vides si absente ou
+  // illisible.
+  const applyLocalData = (key) => {
+    const guest = key === GUEST_DATA_KEY;
+    const saved = localStorage.getItem(key);
+    try {
+      applyData(saved ? JSON.parse(saved) : {}, { guest });
+    } catch {
+      applyData({}, { guest });
     }
   };
 
@@ -166,6 +241,12 @@ export function useKanbanLogic() {
       }
 
       if (currentUser) {
+        // Remet l'écran de chargement à chaque connexion, y compris après une
+        // déconnexion sans rechargement de la page : sinon l'interface vide
+        // ("Créez votre premier univers") s'affichait en attendant Firestore,
+        // et créer un univers à ce moment écrasait tout le document distant.
+        setLoading(true);
+        setIsInitialLoad(true);
         let isFirstSnapshot = true;
         docUnsubRef.current = onSnapshot(
           doc(db, "users", currentUser.uid),
@@ -183,26 +264,28 @@ export function useKanbanLogic() {
               if (docSnap.exists()) {
                 applyData(docSnap.data());
               } else {
-                const saved = localStorage.getItem(`kanban-data-${currentUser.uid}`);
-                try { applyData(saved ? JSON.parse(saved) : {}); } catch { applyData({}); }
+                applyLocalData(userDataKey(currentUser.uid));
               }
               setIsInitialLoad(false);
               setLoading(false);
               return;
             }
 
-            // Mise à jour confirmée : soit l'accusé de réception de notre
-            // propre écriture (données déjà identiques, sans effet visible
-            // grâce à lastSyncedRef), soit un changement fait depuis un
-            // autre appareil.
-            if (docSnap.exists()) applyData(docSnap.data());
+            // Changement fait depuis un autre appareil. Si des modifications
+            // locales attendent encore leur sauvegarde (debounce), elles sont
+            // envoyées d'abord et ce snapshot est ignoré : l'appliquer les
+            // effacerait sans qu'elles aient jamais été enregistrées.
+            if (pendingSaveRef.current) {
+              flushSave();
+              return;
+            }
+            if (docSnap.exists()) applyData(docSnap.data(), { isRemote: true });
           },
           (error) => {
             console.error("Erreur d'écoute Firestore :", error);
             if (isFirstSnapshot) {
               isFirstSnapshot = false;
-              const saved = localStorage.getItem(`kanban-data-${currentUser.uid}`);
-              try { applyData(saved ? JSON.parse(saved) : {}); } catch { applyData({}); }
+              applyLocalData(userDataKey(currentUser.uid));
               setIsInitialLoad(false);
               setLoading(false);
             }
@@ -213,8 +296,7 @@ export function useKanbanLogic() {
         // marqueur, seul le state React `isGuest` (jamais persisté) faisait
         // foi, donc tout `reload()` ramenait à l'écran de connexion malgré
         // des données invité toujours présentes dans localStorage.
-        const saved = localStorage.getItem("kanban-data-guest");
-        try { applyData(saved ? JSON.parse(saved) : {}); } catch { applyData({}); }
+        applyLocalData(GUEST_DATA_KEY);
         setIsGuest(true);
         setIsInitialLoad(false);
         setLoading(false);
@@ -238,38 +320,77 @@ export function useKanbanLogic() {
   }, []);
 
   // --- SAUVEGARDE ---
-  // Écrit dataToSave, en mettant en attente (plutôt qu'en lançant en
-  // parallèle) toute nouvelle demande arrivée pendant qu'une écriture est
-  // déjà en vol — dès que celle-ci se termine, la plus récente demande en
-  // attente (si elle existe) est relancée immédiatement.
-  const persist = async (dataToSave, serialized) => {
-    if (savingRef.current) {
-      pendingDataRef.current = { dataToSave, serialized };
-      return;
-    }
-    savingRef.current = true;
-    let succeeded = false;
+  // Avertit une fois à chaque franchissement de seuil (80 %, puis 95 %) de
+  // l'espace disponible : au-delà de 100 %, toutes les sauvegardes échouent.
+  const trackStorageUsage = (serialized, guest) => {
+    const usage = computeStorageUsage(serialized, guest);
+    setStorageUsage(usage);
+    const previous = usageLevelRef.current;
+    usageLevelRef.current = usage.level;
+    if (USAGE_LEVEL_RANK[usage.level] <= USAGE_LEVEL_RANK[previous]) return;
+    const percent = Math.round(usage.ratio * 100);
+    showToast(
+      "error",
+      usage.level === "critical"
+        ? `Espace de stockage presque plein (${percent} %) : videz la corbeille ou exportez puis supprimez d'anciens contenus.`
+        : `Espace de stockage utilisé à ${percent} % : pensez à vider la corbeille.`
+    );
+  };
+
+  // Écrit d'abord la copie locale (synchrone), puis lance l'écriture
+  // Firestore SANS l'attendre pour enchaîner les suivantes : setDoc ne se
+  // résout qu'une fois l'écriture confirmée par le serveur, donc jamais tant
+  // qu'on est hors-ligne — l'attendre bloquait toutes les sauvegardes
+  // suivantes en mémoire, perdues à la fermeture de l'app. Le SDK applique
+  // de toute façon les écritures d'un même client dans leur ordre d'émission.
+  // Renvoie une promesse résolue à true/false une fois l'écriture distante
+  // confirmée ou refusée (utile pour attendre avant de fermer l'app).
+  const persist = ({ dataToSave, serialized, uid, guest }) => {
+    if (!uid && !guest) return Promise.resolve(true);
+    lastSyncedRef.current = serialized;
+    trackStorageUsage(serialized, guest);
+
     try {
-      if (user) {
-        await setDoc(doc(db, "users", user.uid), dataToSave);
-        localStorage.setItem(`kanban-data-${user.uid}`, JSON.stringify(dataToSave));
-      } else if (isGuest) {
-        localStorage.setItem("kanban-data-guest", JSON.stringify(dataToSave));
-      }
-      succeeded = true;
-      lastSyncedRef.current = serialized;
+      localStorage.setItem(uid ? userDataKey(uid) : GUEST_DATA_KEY, JSON.stringify(dataToSave));
     } catch (error) {
-      console.error("Erreur lors de la sauvegarde :", error);
-      showToast("error", "Échec de l'enregistrement — vérifiez votre connexion.");
-    } finally {
-      savingRef.current = false;
-      if (pendingDataRef.current) {
-        const next = pendingDataRef.current;
-        pendingDataRef.current = null;
-        persist(next.dataToSave, next.serialized);
+      console.error("Erreur lors de la copie locale :", error);
+      if (guest) {
+        // En mode invité, le stockage local est la seule copie.
+        lastSyncedRef.current = null;
+        showToast("error", "Stockage local plein : vos dernières modifications n'ont pas pu être enregistrées.");
+        return Promise.resolve(false);
       }
+      showToast("error", "Copie locale impossible (stockage plein) ; la synchronisation en ligne continue.");
     }
-    return succeeded;
+    if (!uid) return Promise.resolve(true);
+
+    let write;
+    try {
+      write = setDoc(doc(db, "users", uid), dataToSave);
+    } catch (error) {
+      write = Promise.reject(error);
+    }
+    return write.then(
+      () => true,
+      (error) => {
+        console.error("Erreur lors de la sauvegarde :", error);
+        // Autorise une nouvelle tentative au prochain changement.
+        if (lastSyncedRef.current === serialized) lastSyncedRef.current = null;
+        showToast("error", "Échec de l'enregistrement en ligne : vérifiez votre connexion.");
+        return false;
+      }
+    );
+  };
+
+  // Écrit immédiatement la sauvegarde en attente (sans attendre la fin du
+  // debounce) : fermeture de la page/de l'app, déconnexion, conflit avec une
+  // mise à jour distante.
+  const flushSave = () => {
+    clearTimeout(saveTimerRef.current);
+    const pending = pendingSaveRef.current;
+    if (!pending) return Promise.resolve(true);
+    pendingSaveRef.current = null;
+    return persist(pending);
   };
 
   useEffect(() => {
@@ -278,7 +399,10 @@ export function useKanbanLogic() {
     // corbeille — sans cette exception, cette suppression (et tout ce qui la
     // suit) ne serait jamais persistée, et un rechargement la ferait
     // disparaître de la corbeille comme si elle n'avait jamais eu lieu.
-    if (!mounted || isInitialLoad || (projects.length === 0 && trashItems.length === 0)) return;
+    if (!mounted || isInitialLoad || (projects.length === 0 && trashItems.length === 0)) {
+      pendingSaveRef.current = null;
+      return;
+    }
 
     const dataToSave = {
       projects,
@@ -291,21 +415,34 @@ export function useKanbanLogic() {
       settings,
     };
 
-    const serialized = stableStringify(dataToSave);
+    const serialized = syncFingerprint(dataToSave);
     // Identique à la dernière version connue de Firestore (chargement initial
     // ou mise à jour reçue d'un autre appareil via onSnapshot) : rien à
     // réécrire — évite la boucle décrite dans l'effet d'auth ci-dessus.
-    if (serialized === lastSyncedRef.current) return;
+    if (serialized === lastSyncedRef.current) {
+      pendingSaveRef.current = null;
+      return;
+    }
 
     // Debounce court : regroupe les changements rapprochés (ex. plusieurs
     // champs modifiés en quelques secondes) en une seule écriture au lieu
     // d'une requête Firestore par changement d'état.
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => persist(dataToSave, serialized), 500);
+    pendingSaveRef.current = { dataToSave, serialized, uid: user?.uid || null, guest: isGuest };
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(saveTimerRef.current);
     // activeProjectId & activeSubProjectId exclus : la navigation seule ne déclenche pas de sauvegarde
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, subProjects, allProjectsData, knowledgeBaseByProject, arcsByProject, trashItems, settings, mounted, user, isGuest, isInitialLoad]);
+
+  // Fermeture/rechargement de la page : écrit tout de suite ce qui attendait
+  // la fin du debounce, au lieu de le perdre.
+  useEffect(() => {
+    window.addEventListener("pagehide", flushSave);
+    return () => window.removeEventListener("pagehide", flushSave);
+    // flushSave ne lit que des refs : la version du montage reste valable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- PURGE AUTOMATIQUE DE LA CORBEILLE ---
   useEffect(() => {
@@ -350,18 +487,16 @@ export function useKanbanLogic() {
 
   // --- AUTHENTIFICATION ---
   const handleGuestLogin = () => {
-    const saved = localStorage.getItem("kanban-data-guest");
-    if (saved) {
-      try { applyData(JSON.parse(saved)); } catch { applyData({}); }
-    } else {
-      applyData({});
-    }
+    applyLocalData(GUEST_DATA_KEY);
     localStorage.setItem(GUEST_SESSION_KEY, "1");
     setIsInitialLoad(false);
     setIsGuest(true);
   };
 
   const handleLogout = async () => {
+    // Écrit les dernières modifications avant de vider l'état (sinon
+    // l'effet de sauvegarde, voyant des données vides, les abandonne).
+    flushSave();
     if (!isGuest) await signOut(auth);
     localStorage.removeItem(GUEST_SESSION_KEY);
     setIsGuest(false);
@@ -374,6 +509,9 @@ export function useKanbanLogic() {
     setActiveSubProjectId(null);
     setActivePage(null);
     setTrashItems([]);
+    setSettings(DEFAULT_SETTINGS);
+    setStorageUsage(null);
+    usageLevelRef.current = "ok";
     setUser(null);
   };
 
@@ -764,88 +902,31 @@ export function useKanbanLogic() {
   // dans celui actuellement ouvert — sinon un arc/chapitre supprimé dans un
   // univers réapparaît dans un autre livre juste parce que c'est celui qu'on
   // regardait au moment de cliquer sur "Restaurer".
+  // La logique de destination vit dans lib/trashRestore.js (testée) ;
+  // l'élément ne quitte la corbeille que si la restauration a réellement eu
+  // lieu.
   const handleRestore = (item) => {
-    const { trashId, originalType, deletedAt, projectId, subProjectId, ...clean } = item;
-
-    if (originalType === "kbFile") {
-      const targetProjectId =
-        projectId && projects.some((p) => p.id === projectId) ? projectId : activeProjectId;
-      if (targetProjectId) {
-        setKnowledgeBaseByProject((prev) => ({
-          ...prev,
-          [targetProjectId]: [...(prev[targetProjectId] || []), clean],
-        }));
-      }
-      removeFromTrash(trashId);
+    const result = restoreTrashItem(
+      {
+        projects,
+        subProjects,
+        allProjectsData,
+        knowledgeBaseByProject,
+        activeProjectId,
+        activeSubProjectId,
+      },
+      item
+    );
+    if (!result.restored) {
+      showToast("error", result.reason);
       return;
     }
-
-    // Univers entier : ré-éclate l'instantané autonome dans les mêmes maps
-    // que celles vidées par deleteProject. Collision d'id quasi impossible
-    // avec des ids Date.now(), mais gardée par prudence — seul l'id racine
-    // est régénéré, les ids des livres/arcs/chapitres qu'il référence restent
-    // inchangés (déjà namespacés dans leurs propres maps).
-    if (originalType === "project") {
-      const restoredId = projects.some((p) => p.id === clean.id)
-        ? `proj-${Date.now()}`
-        : clean.id;
-      setProjects((prev) => [...prev, { id: restoredId, name: clean.name }]);
-      setSubProjects((prev) => ({ ...prev, [restoredId]: clean.subProjects || [] }));
-      setAllProjectsData((prev) => ({ ...prev, ...(clean.allProjectsData || {}) }));
-      setKnowledgeBaseByProject((prev) => ({
-        ...prev,
-        [restoredId]: clean.knowledgeBaseByProject || [],
-      }));
-      removeFromTrash(trashId);
-      return;
-    }
-
-    // Livre : reprend l'univers d'origine s'il existe encore, sinon retombe
-    // sur l'univers actif — même repli que pour un arc/chapitre plus bas.
-    if (originalType === "subProject") {
-      const targetProjectId =
-        projectId && projects.some((p) => p.id === projectId) ? projectId : activeProjectId;
-      if (targetProjectId) {
-        const { allProjectsData: bookColumns, ...bookOnly } = clean;
-        setSubProjects((prev) => ({
-          ...prev,
-          [targetProjectId]: [...(prev[targetProjectId] || []), bookOnly],
-        }));
-        setAllProjectsData((prev) => ({ ...prev, [bookOnly.id]: bookColumns || [] }));
-      }
-      removeFromTrash(trashId);
-      return;
-    }
-
-    const targetSubId =
-      subProjectId && allProjectsData[subProjectId] !== undefined
-        ? subProjectId
-        : activeSubProjectId;
-
-    if (targetSubId) {
-      setAllProjectsData((prev) => {
-        const cols = prev[targetSubId] || [];
-        let updatedCols;
-
-        if (originalType === "column") {
-          updatedCols = [...cols, { ...clean, pages: clean.pages || [] }];
-        } else {
-          const targetColId = cols.some((c) => c.id === clean.columnId)
-            ? clean.columnId
-            : cols[0]?.id;
-          if (!targetColId) return prev;
-          const { columnId, ...pageOnly } = clean;
-          updatedCols = cols.map((col) =>
-            col.id === targetColId
-              ? { ...col, pages: [pageOnly, ...col.pages] }
-              : col
-          );
-        }
-
-        return { ...prev, [targetSubId]: updatedCols };
-      });
-    }
-    removeFromTrash(trashId);
+    const { changes } = result;
+    if (changes.projects) setProjects(changes.projects);
+    if (changes.subProjects) setSubProjects(changes.subProjects);
+    if (changes.allProjectsData) setAllProjectsData(changes.allProjectsData);
+    if (changes.knowledgeBaseByProject) setKnowledgeBaseByProject(changes.knowledgeBaseByProject);
+    removeFromTrash(item.trashId);
   };
 
   // --- PARAMÈTRES ---
@@ -939,6 +1020,10 @@ export function useKanbanLogic() {
   };
 
   const deleteAllData = async () => {
+    // Abandonne toute sauvegarde en attente : elle réécrirait les données
+    // qu'on est en train de supprimer.
+    clearTimeout(saveTimerRef.current);
+    pendingSaveRef.current = null;
     setProjects([]);
     setSubProjects({});
     setAllProjectsData({});
@@ -959,10 +1044,15 @@ export function useKanbanLogic() {
     // qu'une fois la suppression distante confirmée, pour ne jamais perdre
     // le seul exemplaire des données si l'écriture Firestore échoue.
     if (user) {
-      const succeeded = await persist({}, stableStringify({}));
-      if (succeeded) localStorage.removeItem(`kanban-data-${user.uid}`);
+      const succeeded = await persist({
+        dataToSave: {},
+        serialized: syncFingerprint({}),
+        uid: user.uid,
+        guest: false,
+      });
+      if (succeeded) localStorage.removeItem(userDataKey(user.uid));
     } else if (isGuest) {
-      localStorage.removeItem("kanban-data-guest");
+      localStorage.removeItem(GUEST_DATA_KEY);
     }
   };
 
@@ -1001,6 +1091,8 @@ export function useKanbanLogic() {
     toast,
     showToast,
     dismissToast,
+    flushSave,
+    storageUsage,
     exportAllData,
     exportAllDataZip,
     deleteAllData,
