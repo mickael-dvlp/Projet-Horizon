@@ -10,6 +10,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Sortie d'electron-builder (bundle de l'app empaquetée).
+    "dist/**",
   ]),
 ]);
 

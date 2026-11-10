@@ -1,19 +1,6 @@
 "use client";
-import { Check, Flag } from "lucide-react";
+import { Check } from "lucide-react";
 import { PRIORITY_OPTIONS, getPriorityConfig } from "@/lib/priority";
-
-export function PriorityBadge({ priority, className = "" }) {
-  const cfg = getPriorityConfig(priority);
-  if (!cfg) return null;
-  return (
-    <span
-      className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md shrink-0 ${cfg.badge} ${className}`}
-    >
-      <Flag size={9} />
-      {cfg.label}
-    </span>
-  );
-}
 
 export function PriorityDot({ priority, className = "" }) {
   const cfg = getPriorityConfig(priority);

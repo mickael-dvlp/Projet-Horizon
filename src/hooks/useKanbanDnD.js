@@ -64,9 +64,10 @@ export function useKanbanDnD(logic) {
       const activeIdx = activeCol.pages.findIndex((i) => i.id === active.id);
       const overIdx = overCol.pages.findIndex((i) => i.id === over.id);
 
-      let newIdx = overIdx >= 0 ? overIdx : overCol.pages.length;
+      // Survol d'une carte : insertion à sa place ; survol de la colonne
+      // elle-même (zone vide) : insertion en fin de liste.
+      const newIdx = overIdx >= 0 ? overIdx : overCol.pages.length;
 
-      // Si on déplace vers une position plus basse dans la même colonne, il faut ajuster l'index de destination
       return prev.map((col) => {
         if (col.id === activeCont)
           return { ...col, pages: col.pages.filter((i) => i.id !== active.id) };

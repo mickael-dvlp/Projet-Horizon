@@ -47,9 +47,6 @@ export default function Sidebar({
   onOpenDashboard,
   onUpdateProject,
   onUpdateSubProject,
-  onSetSubProjectStatus,
-  onSetSubProjectPriority,
-  onSetSubProjectDeadline,
   onDeleteProject,
   onDeleteSubProject,
   onOpenTrash,
@@ -194,7 +191,7 @@ export default function Sidebar({
       onUpdateSubProject(
         editingSubProject.projectId,
         editingSubProject.id,
-        editingSubProject.name.trim()
+        { name: editingSubProject.name.trim() }
       );
     }
     setEditingSubProject(null);
@@ -473,7 +470,7 @@ export default function Sidebar({
                                 </p>
                                 <StatusMenu
                                   value={sub.status}
-                                  onChange={(status) => onSetSubProjectStatus(project.id, sub.id, status)}
+                                  onChange={(status) => onUpdateSubProject(project.id, sub.id, { status })}
                                 />
                                 <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
                                 <p className="px-3 pt-0.5 pb-1 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
@@ -481,7 +478,7 @@ export default function Sidebar({
                                 </p>
                                 <PriorityMenu
                                   value={sub.priority}
-                                  onChange={(priority) => onSetSubProjectPriority(project.id, sub.id, priority)}
+                                  onChange={(priority) => onUpdateSubProject(project.id, sub.id, { priority })}
                                 />
                                 <div className="h-px bg-slate-100 dark:bg-slate-700 my-1 mx-3" />
                                 <div className="px-3 pt-0.5 pb-1.5">
@@ -491,7 +488,7 @@ export default function Sidebar({
                                   <DeadlineField
                                     value={sub.deadline}
                                     onChange={(deadline) => {
-                                      onSetSubProjectDeadline(project.id, sub.id, deadline);
+                                      onUpdateSubProject(project.id, sub.id, { deadline });
                                       setStatusMenuFor(null);
                                     }}
                                   />

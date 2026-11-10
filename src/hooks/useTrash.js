@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { newId } from "@/lib/id";
 
 export function useTrash() {
   const [trashItems, setTrashItems] = useState([]);
@@ -8,7 +9,7 @@ export function useTrash() {
       {
         ...item,
         ...origin,
-        trashId: `trash-${Date.now()}`,
+        trashId: newId("trash"),
         originalType: type,
         deletedAt: new Date().toISOString(),
       },

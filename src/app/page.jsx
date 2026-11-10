@@ -193,10 +193,7 @@ export default function Home() {
         onCreate={logic.handleCreateProject}
         onCreateSubProject={logic.handleCreateSubProject}
         onUpdateProject={logic.handleRenameProject}
-        onUpdateSubProject={logic.handleRenameSubProject}
-        onSetSubProjectStatus={logic.handleSetSubProjectStatus}
-        onSetSubProjectPriority={logic.handleSetSubProjectPriority}
-        onSetSubProjectDeadline={logic.handleSetSubProjectDeadline}
+        onUpdateSubProject={logic.updateSubProject}
         onDeleteProject={(projectId) => {
           if (projectId === logic.activeProjectId) setActiveKbFile(null);
           logic.deleteProject(projectId);

@@ -2,18 +2,6 @@
 import { Check } from "lucide-react";
 import { STATUS_OPTIONS, getStatusConfig } from "@/lib/status";
 
-export function StatusBadge({ status, className = "" }) {
-  const cfg = getStatusConfig(status);
-  return (
-    <span
-      className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md shrink-0 ${cfg.badge} ${className}`}
-    >
-      <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-      {cfg.label}
-    </span>
-  );
-}
-
 export function StatusDot({ status, className = "" }) {
   const cfg = getStatusConfig(status);
   return (

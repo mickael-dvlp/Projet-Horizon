@@ -8,6 +8,8 @@ import { triggerDownload } from "@/lib/download";
 import { buildZipEntries } from "@/lib/exportData";
 import { restoreTrashItem } from "@/lib/trashRestore";
 import { validateBackup } from "@/lib/backup";
+import { newId } from "@/lib/id";
+import { addTask, toggleTask, removeTask } from "@/lib/tasks";
 import { onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup } from "firebase/auth";
 import {
   doc,
@@ -85,6 +87,9 @@ function computeStorageUsage(serialized, isGuest) {
 
 const USAGE_LEVEL_RANK = { ok: 0, warning: 1, critical: 2 };
 
+// Premier arc de tout nouveau livre.
+const createDefaultColumn = () => ({ id: newId("col"), title: "Arc 1", color: "indigo", pages: [] });
+
 export function useKanbanLogic() {
   const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState(null);
@@ -139,6 +144,17 @@ export function useKanbanLogic() {
   const columns = allProjectsData[activeSubProjectId] || [];
   const knowledgeBase = knowledgeBaseByProject[activeProjectId] || [];
 
+  // Données enregistrées (Firestore / localStorage) et exportées en JSON.
+  const persistedData = () => ({
+    projects,
+    subProjects,
+    allData: allProjectsData,
+    knowledgeBaseByProject,
+    arcsByProject,
+    trash: trashItems,
+    settings,
+  });
+
   useEffect(() => {
     activeRef.current = { activeProjectId, activeSubProjectId, activePage };
   });
@@ -159,9 +175,7 @@ export function useKanbanLogic() {
       data.projects.forEach((proj) => {
         const subId = `sp-${proj.id}`;
         migratedSubProjects[proj.id] = [{ id: subId, name: "Livre 1" }];
-        migratedAllData[subId] = data.allData?.[proj.id] || [
-          { id: `col-${Date.now()}`, title: "Arc 1", color: "indigo", pages: []},
-        ];
+        migratedAllData[subId] = data.allData?.[proj.id] || [createDefaultColumn()];
       });
       data = { ...data, subProjects: migratedSubProjects, allData: migratedAllData };
     }
@@ -423,14 +437,8 @@ export function useKanbanLogic() {
     }
 
     const dataToSave = {
-      projects,
-      subProjects,
-      allData: allProjectsData,
-      knowledgeBaseByProject,
-      arcsByProject,
+      ...persistedData(),
       lastActive: { projectId: activeProjectId, subProjectId: activeSubProjectId },
-      trash: trashItems,
-      settings,
     };
 
     const serialized = syncFingerprint(dataToSave);
@@ -611,19 +619,15 @@ export function useKanbanLogic() {
 
   // --- PROJETS ---
   const handleCreateProject = (name) => {
-    const projId = `proj-${Date.now()}`;
-    const subId = `sp-${Date.now()}`;
-    const colId = `col-${Date.now()}`;
+    const projId = newId("proj");
+    const subId = newId("sp");
 
     setProjects((prev) => [...prev, { id: projId, name }]);
     setSubProjects((prev) => ({
       ...prev,
       [projId]: [{ id: subId, name: "Livre 1" }],
     }));
-    setAllProjectsData((prev) => ({
-      ...prev,
-      [subId]: [{ id: colId, title: "Arc 1", color: "indigo", pages: []}],
-    }));
+    setAllProjectsData((prev) => ({ ...prev, [subId]: [createDefaultColumn()] }));
     setKnowledgeBaseByProject((prev) => ({ ...prev, [projId]: [] }));
     setActiveProjectId(projId);
     setActiveSubProjectId(subId);
@@ -683,53 +687,26 @@ export function useKanbanLogic() {
 
   // --- SOUS-PROJETS ---
   const handleCreateSubProject = (projectId, name) => {
-    const subId = `sp-${Date.now()}`;
-    const colId = `col-${Date.now()}`;
+    const subId = newId("sp");
 
     setSubProjects((prev) => ({
       ...prev,
       [projectId]: [...(prev[projectId] || []), { id: subId, name }],
     }));
-    setAllProjectsData((prev) => ({
-      ...prev,
-      [subId]: [{ id: colId, title: "Arc 1", color: "indigo", pages: []}],
-    }));
+    setAllProjectsData((prev) => ({ ...prev, [subId]: [createDefaultColumn()] }));
     setActiveProjectId(projectId);
     setActiveSubProjectId(subId);
   };
 
-  const handleRenameSubProject = (projectId, subProjectId, newName) => {
+  // Met à jour un livre (nom, statut, priorité, échéance, tâches…). `patch`
+  // est un objet de champs, ou une fonction (livre) => champs.
+  const updateSubProject = (projectId, subProjectId, patch) => {
     setSubProjects((prev) => ({
       ...prev,
       [projectId]: (prev[projectId] || []).map((sp) =>
-        sp.id === subProjectId ? { ...sp, name: newName } : sp
-      ),
-    }));
-  };
-
-  const handleSetSubProjectStatus = (projectId, subProjectId, status) => {
-    setSubProjects((prev) => ({
-      ...prev,
-      [projectId]: (prev[projectId] || []).map((sp) =>
-        sp.id === subProjectId ? { ...sp, status } : sp
-      ),
-    }));
-  };
-
-  const handleSetSubProjectPriority = (projectId, subProjectId, priority) => {
-    setSubProjects((prev) => ({
-      ...prev,
-      [projectId]: (prev[projectId] || []).map((sp) =>
-        sp.id === subProjectId ? { ...sp, priority } : sp
-      ),
-    }));
-  };
-
-  const handleSetSubProjectDeadline = (projectId, subProjectId, deadline) => {
-    setSubProjects((prev) => ({
-      ...prev,
-      [projectId]: (prev[projectId] || []).map((sp) =>
-        sp.id === subProjectId ? { ...sp, deadline } : sp
+        sp.id === subProjectId
+          ? { ...sp, ...(typeof patch === "function" ? patch(sp) : patch) }
+          : sp
       ),
     }));
   };
@@ -776,8 +753,8 @@ export function useKanbanLogic() {
   // arc immédiatement en mode renommage, plutôt que de laisser "Nouvel arc"
   // tel quel sans étape de nommage (incohérent avec chapitres/scènes/tâches).
   const addColumn = () => {
-    const newColumn = { id: `col-${Date.now()}`, title: "Nouvel arc", color: "slate", pages: [] };
-    setColumns([...columns, newColumn]);
+    const newColumn = { id: newId("col"), title: "Nouvel arc", color: "slate", pages: [] };
+    setColumns((prev) => [...prev, newColumn]);
     return newColumn.id;
   };
 
@@ -796,11 +773,9 @@ export function useKanbanLogic() {
   // title est garanti non vide par l'appelant (Column.jsx valide avant
   // d'appeler onAddPage) : aucun chapitre "Nouveau Chapitre" par défaut.
   const addPage = (columnId, title) => {
-    const newPage = { id: `p-${Date.now()}`, title, content: "" };
-    setColumns(
-      columns.map((col) =>
-        col.id === columnId ? { ...col, pages: [...col.pages, newPage] } : col
-      )
+    const newPage = { id: newId("p"), title, content: "" };
+    setColumns((prev) =>
+      prev.map((col) => (col.id === columnId ? { ...col, pages: [...col.pages, newPage] } : col))
     );
   };
 
@@ -834,15 +809,15 @@ export function useKanbanLogic() {
   };
 
   // --- SCÈNES (enfants optionnels d'un chapitre) ---
-  // Passe par handleSavePage pour la même raison que les tâches de chapitre :
-  // rester synchronisé avec activePage pendant l'édition.
+  // Passe par handleSavePage pour rester synchronisé avec activePage pendant
+  // l'édition (sinon l'éditeur ouvert afficherait des scènes obsolètes).
   const getPage = (pageId) => columns.flatMap((c) => c.pages).find((p) => p.id === pageId);
 
   const addScene = (pageId, title) => {
     if (!title.trim()) return;
     const scenes = [
       ...(getPage(pageId)?.scenes || []),
-      { id: `scene-${Date.now()}`, title: title.trim(), content: "", tasks: [] },
+      { id: newId("scene"), title: title.trim(), content: "", tasks: [] },
     ];
     handleSavePage(pageId, { scenes });
   };
@@ -859,66 +834,25 @@ export function useKanbanLogic() {
     handleSavePage(pageId, { scenes });
   };
 
-  // --- TÂCHES DE CHAPITRE ---
-  // Passe par handleSavePage pour réutiliser sa synchronisation avec activePage
-  // (sinon l'éditeur ouvert afficherait une liste de tâches obsolète après ajout).
-  const addPageTask = (pageId, label) => {
-    if (!label.trim()) return;
-    const tasks = [
-      ...(getPage(pageId)?.tasks || []),
-      { id: `task-${Date.now()}`, label: label.trim(), done: false },
-    ];
-    handleSavePage(pageId, { tasks });
-  };
+  // --- TÂCHES DE LIVRE --- (tâches de chapitre/scène : cf. MemoEditor)
+  // `operation` : une des fonctions de lib/tasks.js, appliquée à la liste à
+  // jour au moment de la mise à jour d'état.
+  const updateSubProjectTasks = (projectId, subProjectId, operation, arg) =>
+    updateSubProject(projectId, subProjectId, (sp) => ({ tasks: operation(sp.tasks, arg) }));
 
-  const togglePageTask = (pageId, taskId) => {
-    const tasks = (getPage(pageId)?.tasks || []).map((t) =>
-      t.id === taskId ? { ...t, done: !t.done } : t
-    );
-    handleSavePage(pageId, { tasks });
-  };
-
-  const deletePageTask = (pageId, taskId) => {
-    const tasks = (getPage(pageId)?.tasks || []).filter((t) => t.id !== taskId);
-    handleSavePage(pageId, { tasks });
-  };
-
-  // --- TÂCHES DE LIVRE ---
-  const updateSubProjectTasks = (projectId, subProjectId, updater) => {
-    setSubProjects((prev) => ({
-      ...prev,
-      [projectId]: (prev[projectId] || []).map((sp) =>
-        sp.id === subProjectId ? { ...sp, tasks: updater(sp.tasks || []) } : sp
-      ),
-    }));
-  };
-
-  const addSubProjectTask = (projectId, subProjectId, label) => {
-    if (!label.trim()) return;
-    updateSubProjectTasks(projectId, subProjectId, (tasks) => [
-      ...tasks,
-      { id: `task-${Date.now()}`, label: label.trim(), done: false },
-    ]);
-  };
-
-  const toggleSubProjectTask = (projectId, subProjectId, taskId) => {
-    updateSubProjectTasks(projectId, subProjectId, (tasks) =>
-      tasks.map((t) => (t.id === taskId ? { ...t, done: !t.done } : t))
-    );
-  };
-
-  const deleteSubProjectTask = (projectId, subProjectId, taskId) => {
-    updateSubProjectTasks(projectId, subProjectId, (tasks) =>
-      tasks.filter((t) => t.id !== taskId)
-    );
-  };
+  const addSubProjectTask = (projectId, subProjectId, label) =>
+    updateSubProjectTasks(projectId, subProjectId, addTask, label);
+  const toggleSubProjectTask = (projectId, subProjectId, taskId) =>
+    updateSubProjectTasks(projectId, subProjectId, toggleTask, taskId);
+  const deleteSubProjectTask = (projectId, subProjectId, taskId) =>
+    updateSubProjectTasks(projectId, subProjectId, removeTask, taskId);
 
   // --- BASE DE CONNAISSANCES (scoped to activeProjectId) ---
   // subProjectIds vide/absent = portée "univers entier" ; sinon la fiche
   // n'est visible que pour les livres listés (cf. lib/knowledgeBase.js).
   const addKbFile = (name, content, subProjectIds = []) => {
     if (!activeProjectId) return;
-    const id = `kb-${Date.now()}`;
+    const id = newId("kb");
     setKnowledgeBaseByProject((prev) => ({
       ...prev,
       [activeProjectId]: [
@@ -1001,16 +935,7 @@ export function useKanbanLogic() {
   // --- PARAMÈTRES ---
   // Sauvegarde complète : tout ce qu'il faut pour une restauration à
   // l'identique (données éditoriales + réglages utilisateur).
-  const buildFullBackup = () => ({
-    projects,
-    subProjects,
-    allData: allProjectsData,
-    knowledgeBaseByProject,
-    arcsByProject,
-    trash: trashItems,
-    settings,
-    exportedAt: new Date().toISOString(),
-  });
+  const buildFullBackup = () => ({ ...persistedData(), exportedAt: new Date().toISOString() });
 
   const exportAllData = () => {
     try {
@@ -1135,9 +1060,7 @@ export function useKanbanLogic() {
     projects,
     subProjects,
     activeProjectId,
-    setActiveProjectId,
     activeSubProjectId,
-    setActiveSubProjectId,
     handleSelectSubProject,
     handleSelectProject,
     columns,
@@ -1171,10 +1094,7 @@ export function useKanbanLogic() {
     handleRenameProject,
     deleteProject,
     handleCreateSubProject,
-    handleRenameSubProject,
-    handleSetSubProjectStatus,
-    handleSetSubProjectPriority,
-    handleSetSubProjectDeadline,
+    updateSubProject,
     deleteSubProject,
     deletePage,
     handleRestore,
@@ -1192,9 +1112,6 @@ export function useKanbanLogic() {
     addScene,
     deleteScene,
     handleSaveScene,
-    addPageTask,
-    togglePageTask,
-    deletePageTask,
     addSubProjectTask,
     toggleSubProjectTask,
     deleteSubProjectTask,

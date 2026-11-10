@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { htmlToMarkdown } from "@/lib/htmlToMarkdown";
 import { triggerDownload, sanitizeFilename } from "@/lib/download";
 import { countWordsFromHtml } from "@/lib/wordCount";
+import { addTask, toggleTask, removeTask } from "@/lib/tasks";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
 import TaskList from "@/components/TaskList";
 import SceneListPanel from "@/components/SceneListPanel";
@@ -117,9 +118,9 @@ export default function MemoEditor({
   };
 
   const updateCounts = () => {
-    const text = (editorRef.current?.innerText || "").trim();
-    setCharCount(text.length);
-    setWordCount(text ? text.split(/\s+/).length : 0);
+    const { words, chars } = countWordsFromHtml(editorRef.current?.innerHTML);
+    setWordCount(words);
+    setCharCount(chars);
   };
 
   // Changer de chapitre réinitialise la navigation scène (on ne veut pas
@@ -571,15 +572,9 @@ export default function MemoEditor({
           <div id="memo-tasks-panel" className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 shrink-0">
             <TaskList
               tasks={unit.tasks || []}
-              onAdd={(label) =>
-                saveUnit({ tasks: [...(unit.tasks || []), { id: `task-${Date.now()}`, label, done: false }] })
-              }
-              onToggle={(taskId) =>
-                saveUnit({ tasks: (unit.tasks || []).map((t) => (t.id === taskId ? { ...t, done: !t.done } : t)) })
-              }
-              onDelete={(taskId) =>
-                saveUnit({ tasks: (unit.tasks || []).filter((t) => t.id !== taskId) })
-              }
+              onAdd={(label) => saveUnit({ tasks: addTask(unit.tasks, label) })}
+              onToggle={(taskId) => saveUnit({ tasks: toggleTask(unit.tasks, taskId) })}
+              onDelete={(taskId) => saveUnit({ tasks: removeTask(unit.tasks, taskId) })}
               highlightTaskId={taskFocus?.kind !== "book" ? taskFocus?.taskId : null}
             />
           </div>

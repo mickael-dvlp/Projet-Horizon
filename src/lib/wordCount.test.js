@@ -22,4 +22,16 @@ describe("countWordsFromHtml", () => {
     const html = "<h1>Titre</h1><p>Un&nbsp;mot</p>";
     expect(countWordsFromHtml(html)).toEqual({ words: 3, chars: 13 });
   });
+
+  it("ne coupe pas un mot mis en forme en plusieurs morceaux", () => {
+    expect(countWordsFromHtml("<p><b>gr</b>as et <i>ita</i>lique</p>")).toEqual({ words: 3, chars: 16 });
+  });
+
+  it("sépare les lignes produites par l'éditeur", () => {
+    expect(countWordsFromHtml("un<div>deux</div><div>trois<br></div>").words).toBe(3);
+  });
+
+  it("décode les entités HTML", () => {
+    expect(countWordsFromHtml("<p>Tom &amp; Jerry &#233;t&#xE9;</p>")).toEqual({ words: 4, chars: 15 });
+  });
 });

@@ -3,8 +3,7 @@ import { useEffect } from "react";
 import { CheckCircle2, AlertCircle, X } from "lucide-react";
 
 // Bandeau de notification flottant, réutilisé pour les succès/échecs de
-// sauvegarde et d'export — même vocabulaire visuel que le bandeau d'erreur
-// déjà utilisé dans l'assistant IA (MemoEditor.jsx).
+// sauvegarde, d'export et d'import.
 export default function Toast({ toast, onDismiss }) {
   useEffect(() => {
     if (!toast) return;
