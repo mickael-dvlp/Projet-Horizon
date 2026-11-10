@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
-import { auth, db, googleProvider } from "@/firebase/config";
 import { useTrash } from "@/hooks/useTrash";
+import { useCloudSync } from "@/hooks/useCloudSync";
 import { htmlToMarkdown } from "@/lib/htmlToMarkdown";
 import { buildUniverseSummary } from "@/lib/universeSummary";
 import { triggerDownload } from "@/lib/download";
@@ -10,23 +10,7 @@ import { restoreTrashItem } from "@/lib/trashRestore";
 import { validateBackup } from "@/lib/backup";
 import { newId } from "@/lib/id";
 import { addTask, toggleTask, removeTask } from "@/lib/tasks";
-import { onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup } from "firebase/auth";
-import {
-  doc,
-  setDoc,
-  deleteDoc,
-  onSnapshot,
-  waitForPendingWrites,
-  terminate,
-  clearIndexedDbPersistence,
-} from "firebase/firestore";
 import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
-
-// Marqueur localStorage distinct des données elles-mêmes : indique qu'une
-// session invité était active, pour la restaurer après un rechargement.
-const GUEST_SESSION_KEY = "horizon-guest-session";
-const GUEST_DATA_KEY = "kanban-data-guest";
-const userDataKey = (uid) => `kanban-data-${uid}`;
 
 // 30 jours par défaut pour les nouveaux comptes : une corbeille jamais purgée
 // grossit indéfiniment (elle garde le texte intégral des chapitres
@@ -34,70 +18,21 @@ const userDataKey = (uid) => `kanban-data-${uid}`;
 // Un réglage déjà enregistré (y compris "Jamais" = null) reste prioritaire.
 const DEFAULT_SETTINGS = { trashRetentionDays: 30, sidebarBg: null, mainBg: null };
 
-const SAVE_DEBOUNCE_MS = 500;
-// Attente maximale de la synchronisation avant déconnexion / suppression.
-const LOGOUT_SYNC_TIMEOUT_MS = 3000;
-const DELETE_SYNC_TIMEOUT_MS = 5000;
-
-// Limites de stockage : 1 Mio par document Firestore (compte connecté), et
-// ~5 millions de caractères pour le localStorage de Chromium (invité).
-const FIRESTORE_DOC_LIMIT = 1_048_576;
-const LOCAL_STORAGE_LIMIT = 5_000_000;
-const USAGE_WARNING_RATIO = 0.8;
-const USAGE_CRITICAL_RATIO = 0.95;
-
 // Anciennes clés localStorage (fonds d'écran stockés uniquement sur l'appareil,
 // jamais synchronisés) : à ne lire qu'une fois, pour reprendre un choix déjà
 // fait plutôt que de le perdre en migrant vers `settings` (synchronisé).
 const LEGACY_SIDEBAR_BG_KEY = "horizon-sidebar-bg";
 const LEGACY_MAIN_BG_KEY = "horizon-main-bg";
 
-// Sérialisation stable (clés triées) : Firestore ne garantit pas l'ordre des
-// clés d'un champ map après un aller-retour serveur, contrairement à un objet
-// JS local — sans ce tri, une comparaison JSON.stringify() classique verrait
-// une "différence" là où le contenu est en fait identique.
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-// Empreinte servant à détecter un changement à sauvegarder. `lastActive` en
-// est exclu : la navigation seule ne doit déclencher aucune écriture, et deux
-// appareils ouverts sur des livres différents se renverraient sinon leur
-// position en boucle à chaque synchronisation.
-function syncFingerprint(data) {
-  const { lastActive, ...content } = data;
-  return stableStringify(content);
-}
-
-function computeStorageUsage(serialized, isGuest) {
-  const used = isGuest ? serialized.length : new TextEncoder().encode(serialized).length;
-  const limit = isGuest ? LOCAL_STORAGE_LIMIT : FIRESTORE_DOC_LIMIT;
-  const ratio = used / limit;
-  const level =
-    ratio >= USAGE_CRITICAL_RATIO ? "critical" : ratio >= USAGE_WARNING_RATIO ? "warning" : "ok";
-  return { used, limit, ratio, level };
-}
-
-const USAGE_LEVEL_RANK = { ok: 0, warning: 1, critical: 2 };
-
 // Premier arc de tout nouveau livre.
 const createDefaultColumn = () => ({ id: newId("col"), title: "Arc 1", color: "indigo", pages: [] });
 
-// `confirm` : boîte de confirmation de l'app (useConfirm), utilisée avant
-// une déconnexion qui perdrait des modifications non synchronisées.
+// État et actions de l'app (univers, livres, arcs, chapitres, scènes, base de
+// connaissances, corbeille, exports). La connexion et la sauvegarde sont
+// déléguées à useCloudSync. `confirm` : boîte de confirmation de l'app
+// (useConfirm), utilisée avant une déconnexion qui perdrait des
+// modifications non synchronisées.
 export function useKanbanLogic({ confirm }) {
-  const [mounted, setMounted] = useState(false);
-  const [user, setUser] = useState(null);
-  const [isGuest, setIsGuest] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const { trashItems, moveToTrash, removeFromTrash, setTrashItems } = useTrash();
   const [isTrashOpen, setIsTrashOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -115,33 +50,16 @@ export function useKanbanLogic({ confirm }) {
   // chaque sauvegarde pour ne jamais perdre les données existantes des
   // utilisateurs qui avaient créé des arcs narratifs avant ce retrait.
   const [arcsByProject, setArcsByProject] = useState({});
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [activePage, setActivePage] = useState(null);
   const [draggedItem, setDraggedItem] = useState(null);
   const [toast, setToast] = useState(null);
-  const [storageUsage, setStorageUsage] = useState(null);
 
   const showToast = (type, message) => setToast({ type, message, id: Date.now() });
   const dismissToast = () => setToast(null);
 
-  // Sauvegarde en attente (debounce) : données, empreinte et destination
-  // (compte ou invité) figées au moment du changement, pour pouvoir être
-  // écrites plus tard — ou immédiatement via flushSave — sans dépendre de
-  // l'état React du moment.
-  const pendingSaveRef = useRef(null);
-  const saveTimerRef = useRef(null);
-  const usageLevelRef = useRef("ok");
   // Navigation courante, lisible depuis l'écoute Firestore (enregistrée une
   // seule fois au montage, donc sans accès direct à l'état à jour).
   const activeRef = useRef({ activeProjectId: null, activeSubProjectId: null, activePage: null });
-  // Écoute Firestore active (onSnapshot) pour l'utilisateur courant, à fermer
-  // dès qu'elle change (changement de compte, déconnexion, démontage).
-  const docUnsubRef = useRef(null);
-  // Dernière version des données connue comme déjà synchronisée avec
-  // Firestore (chargement initial ou mise à jour reçue via onSnapshot) —
-  // sert de référence à l'effet de sauvegarde pour ne pas réécrire ce qui
-  // vient tout juste d'être lu.
-  const lastSyncedRef = useRef(null);
 
   const columns = allProjectsData[activeSubProjectId] || [];
   const knowledgeBase = knowledgeBaseByProject[activeProjectId] || [];
@@ -161,13 +79,14 @@ export function useKanbanLogic({ confirm }) {
     activeRef.current = { activeProjectId, activeSubProjectId, activePage };
   });
 
+  // Charge des données (lues de Firestore, du stockage local ou d'une
+  // sauvegarde importée) dans l'état, et renvoie leur version normalisée.
   // `isRemote` : mise à jour reçue d'un autre appareil (et non chargement
   // initial). La navigation locale est alors conservée — le "lastActive"
   // enregistré par l'autre appareil n'a pas à faire changer de livre celui-ci,
   // ce qui laissait l'éditeur ouvert sur un chapitre d'un autre livre et
   // perdait silencieusement ses sauvegardes.
-  // `guest` : données du stockage invité (limite de taille différente).
-  const applyData = (rawData, { isRemote = false, guest = false } = {}) => {
+  const applyData = (rawData, { isRemote = false } = {}) => {
     let data = rawData;
 
     // Migration : ancien format (allData keyed by projectId, pas de subProjects)
@@ -182,40 +101,43 @@ export function useKanbanLogic({ confirm }) {
       data = { ...data, subProjects: migratedSubProjects, allData: migratedAllData };
     }
 
-    const loadedProjects = data.projects || [];
-    const loadedSubProjects = data.subProjects || {};
-    const loadedData = data.allData || {};
-    // Ancien champ "knowledgeBase" (base de connaissances globale) volontairement
-    // ignoré : elle est désormais scopée par univers, sans migration automatique.
-    const loadedKb = data.knowledgeBaseByProject || {};
-    const loadedArcs = data.arcsByProject || {};
-    const loadedTrash = data.trash || [];
-    const loadedSettings = { ...DEFAULT_SETTINGS, ...data.settings };
+    const loaded = {
+      projects: data.projects || [],
+      subProjects: data.subProjects || {},
+      allData: data.allData || {},
+      // Ancien champ "knowledgeBase" (base de connaissances globale)
+      // volontairement ignoré : elle est désormais scopée par univers, sans
+      // migration automatique.
+      knowledgeBaseByProject: data.knowledgeBaseByProject || {},
+      arcsByProject: data.arcsByProject || {},
+      trash: data.trash || [],
+      settings: { ...DEFAULT_SETTINGS, ...data.settings },
+    };
     // Les fonds servent à construire un chemin d'image : seules les valeurs
     // connues sont acceptées.
     for (const key of ["sidebarBg", "mainBg"]) {
-      if (!BACKGROUND_OPTIONS.includes(loadedSettings[key])) loadedSettings[key] = null;
+      if (!BACKGROUND_OPTIONS.includes(loaded.settings[key])) loaded.settings[key] = null;
     }
 
-    setProjects(loadedProjects);
-    setSubProjects(loadedSubProjects);
-    setAllProjectsData(loadedData);
-    setKnowledgeBaseByProject(loadedKb);
-    setArcsByProject(loadedArcs);
-    setTrashItems(loadedTrash);
-    setSettings(loadedSettings);
+    setProjects(loaded.projects);
+    setSubProjects(loaded.subProjects);
+    setAllProjectsData(loaded.allData);
+    setKnowledgeBaseByProject(loaded.knowledgeBaseByProject);
+    setArcsByProject(loaded.arcsByProject);
+    setTrashItems(loaded.trash);
+    setSettings(loaded.settings);
 
-    const firstBookOf = (projectId) => loadedSubProjects[projectId]?.[0]?.id || null;
+    const firstBookOf = (projectId) => loaded.subProjects[projectId]?.[0]?.id || null;
 
     if (isRemote) {
       const { activeProjectId: curProj, activeSubProjectId: curSub, activePage: curPage } =
         activeRef.current;
-      const projStillExists = !!curProj && loadedProjects.some((p) => p.id === curProj);
+      const projStillExists = !!curProj && loaded.projects.some((p) => p.id === curProj);
       const subStillExists =
-        !!curSub && Object.values(loadedSubProjects).some((subs) => subs.some((s) => s.id === curSub));
+        !!curSub && Object.values(loaded.subProjects).some((subs) => subs.some((s) => s.id === curSub));
 
       if ((curProj && !projStillExists) || (curSub && !subStillExists)) {
-        const fallbackProj = projStillExists ? curProj : loadedProjects[0]?.id || null;
+        const fallbackProj = projStillExists ? curProj : loaded.projects[0]?.id || null;
         setActiveProjectId(fallbackProj);
         setActiveSubProjectId(firstBookOf(fallbackProj));
         if (curPage) {
@@ -224,7 +146,7 @@ export function useKanbanLogic({ confirm }) {
         }
       } else if (
         curPage &&
-        !(loadedData[curSub] || []).some((c) => c.pages.some((p) => p.id === curPage.id))
+        !(loaded.allData[curSub] || []).some((c) => c.pages.some((p) => p.id === curPage.id))
       ) {
         setActivePage(null);
         showToast("error", "Le chapitre ouvert a été supprimé ou déplacé depuis un autre appareil.");
@@ -232,245 +154,35 @@ export function useKanbanLogic({ confirm }) {
     } else if (data.lastActive?.subProjectId) {
       setActiveProjectId(data.lastActive.projectId);
       setActiveSubProjectId(data.lastActive.subProjectId);
-    } else if (loadedProjects[0]) {
-      setActiveProjectId(loadedProjects[0].id);
-      setActiveSubProjectId(firstBookOf(loadedProjects[0].id));
+    } else if (loaded.projects[0]) {
+      setActiveProjectId(loaded.projects[0].id);
+      setActiveSubProjectId(firstBookOf(loaded.projects[0].id));
     }
 
-    lastSyncedRef.current = syncFingerprint({
-      projects: loadedProjects,
-      subProjects: loadedSubProjects,
-      allData: loadedData,
-      knowledgeBaseByProject: loadedKb,
-      arcsByProject: loadedArcs,
-      trash: loadedTrash,
-      settings: loadedSettings,
-    });
-    trackStorageUsage(lastSyncedRef.current, guest);
+    return loaded;
   };
 
-  // Charge une copie locale (localStorage) ; données vides si absente ou
-  // illisible.
-  const applyLocalData = (key) => {
-    const guest = key === GUEST_DATA_KEY;
-    const saved = localStorage.getItem(key);
-    try {
-      applyData(saved ? JSON.parse(saved) : {}, { guest });
-    } catch {
-      applyData({}, { guest });
-    }
+  const resetData = () => {
+    setProjects([]);
+    setSubProjects({});
+    setAllProjectsData({});
+    setKnowledgeBaseByProject({});
+    setArcsByProject({});
+    setTrashItems([]);
+    setActiveProjectId(null);
+    setActiveSubProjectId(null);
+    setActivePage(null);
+    setSettings(DEFAULT_SETTINGS);
   };
 
-  // --- AUTH & CHARGEMENT ---
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-
-      // Un changement de compte (ou une déconnexion) ferme l'écoute
-      // précédente : sinon un document Firestore d'un compte différent
-      // pourrait encore arriver après coup et mélanger les données.
-      if (docUnsubRef.current) {
-        docUnsubRef.current();
-        docUnsubRef.current = null;
-      }
-
-      if (currentUser) {
-        // Remet l'écran de chargement à chaque connexion, y compris après une
-        // déconnexion sans rechargement de la page : sinon l'interface vide
-        // ("Créez votre premier univers") s'affichait en attendant Firestore,
-        // et créer un univers à ce moment écrasait tout le document distant.
-        setLoading(true);
-        setIsInitialLoad(true);
-        let isFirstSnapshot = true;
-        docUnsubRef.current = onSnapshot(
-          doc(db, "users", currentUser.uid),
-          (docSnap) => {
-            // Ignore l'écho de nos propres écritures pas encore confirmées
-            // par le serveur (setDoc local) : sans ce garde-fou, chaque
-            // sauvegarde redéclenche aussitôt applyData -> effet de
-            // sauvegarde -> setDoc -> nouvel écho, en boucle. La toute
-            // première lecture (chargement/reconnexion) n'est jamais
-            // filtrée, pour ne jamais rester bloqué sur "Chargement...".
-            if (!isFirstSnapshot && docSnap.metadata.hasPendingWrites) return;
-
-            if (isFirstSnapshot) {
-              isFirstSnapshot = false;
-              if (docSnap.exists()) {
-                applyData(docSnap.data());
-              } else {
-                applyLocalData(userDataKey(currentUser.uid));
-              }
-              setIsInitialLoad(false);
-              setLoading(false);
-              return;
-            }
-
-            // Changement fait depuis un autre appareil. Si des modifications
-            // locales attendent encore leur sauvegarde (debounce), elles sont
-            // envoyées d'abord et ce snapshot est ignoré : l'appliquer les
-            // effacerait sans qu'elles aient jamais été enregistrées.
-            if (pendingSaveRef.current) {
-              flushSave();
-              return;
-            }
-            if (docSnap.exists()) applyData(docSnap.data(), { isRemote: true });
-          },
-          (error) => {
-            console.error("Erreur d'écoute Firestore :", error);
-            if (isFirstSnapshot) {
-              isFirstSnapshot = false;
-              applyLocalData(userDataKey(currentUser.uid));
-              setIsInitialLoad(false);
-              setLoading(false);
-            }
-          }
-        );
-      } else if (localStorage.getItem(GUEST_SESSION_KEY) === "1") {
-        // Restaure la session invité après un rechargement complet : sans ce
-        // marqueur, seul le state React `isGuest` (jamais persisté) faisait
-        // foi, donc tout `reload()` ramenait à l'écran de connexion malgré
-        // des données invité toujours présentes dans localStorage.
-        applyLocalData(GUEST_DATA_KEY);
-        setIsGuest(true);
-        setIsInitialLoad(false);
-        setLoading(false);
-      } else {
-        setIsInitialLoad(false);
-        setLoading(false);
-      }
-    });
-
-    setMounted(true);
-    return () => {
-      unsubscribeAuth();
-      if (docUnsubRef.current) {
-        docUnsubRef.current();
-        docUnsubRef.current = null;
-      }
-    };
-    // applyData volontairement exclu : ce listener ne doit s'enregistrer qu'une
-    // seule fois au montage, pas se réabonner à chaque re-render du composant.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // --- SAUVEGARDE ---
-  // Avertit une fois à chaque franchissement de seuil (80 %, puis 95 %) de
-  // l'espace disponible : au-delà de 100 %, toutes les sauvegardes échouent.
-  const trackStorageUsage = (serialized, guest) => {
-    const usage = computeStorageUsage(serialized, guest);
-    setStorageUsage(usage);
-    const previous = usageLevelRef.current;
-    usageLevelRef.current = usage.level;
-    if (USAGE_LEVEL_RANK[usage.level] <= USAGE_LEVEL_RANK[previous]) return;
-    const percent = Math.round(usage.ratio * 100);
-    showToast(
-      "error",
-      usage.level === "critical"
-        ? `Espace de stockage presque plein (${percent} %) : videz la corbeille ou exportez puis supprimez d'anciens contenus.`
-        : `Espace de stockage utilisé à ${percent} % : pensez à vider la corbeille.`
-    );
-  };
-
-  // Écrit d'abord la copie locale (synchrone), puis lance l'écriture
-  // Firestore SANS l'attendre pour enchaîner les suivantes : setDoc ne se
-  // résout qu'une fois l'écriture confirmée par le serveur, donc jamais tant
-  // qu'on est hors-ligne — l'attendre bloquait toutes les sauvegardes
-  // suivantes en mémoire, perdues à la fermeture de l'app. Le SDK applique
-  // de toute façon les écritures d'un même client dans leur ordre d'émission.
-  // Renvoie une promesse résolue à true/false une fois l'écriture distante
-  // confirmée ou refusée (utile pour attendre avant de fermer l'app).
-  const persist = ({ dataToSave, serialized, uid, guest }) => {
-    if (!uid && !guest) return Promise.resolve(true);
-    lastSyncedRef.current = serialized;
-    trackStorageUsage(serialized, guest);
-
-    try {
-      localStorage.setItem(uid ? userDataKey(uid) : GUEST_DATA_KEY, JSON.stringify(dataToSave));
-    } catch (error) {
-      console.error("Erreur lors de la copie locale :", error);
-      if (guest) {
-        // En mode invité, le stockage local est la seule copie.
-        lastSyncedRef.current = null;
-        showToast("error", "Stockage local plein : vos dernières modifications n'ont pas pu être enregistrées.");
-        return Promise.resolve(false);
-      }
-      showToast("error", "Copie locale impossible (stockage plein) ; la synchronisation en ligne continue.");
-    }
-    if (!uid) return Promise.resolve(true);
-
-    let write;
-    try {
-      write = setDoc(doc(db, "users", uid), dataToSave);
-    } catch (error) {
-      write = Promise.reject(error);
-    }
-    return write.then(
-      () => true,
-      (error) => {
-        console.error("Erreur lors de la sauvegarde :", error);
-        // Autorise une nouvelle tentative au prochain changement.
-        if (lastSyncedRef.current === serialized) lastSyncedRef.current = null;
-        showToast("error", "Échec de l'enregistrement en ligne : vérifiez votre connexion.");
-        return false;
-      }
-    );
-  };
-
-  // Écrit immédiatement la sauvegarde en attente (sans attendre la fin du
-  // debounce) : fermeture de la page/de l'app, déconnexion, conflit avec une
-  // mise à jour distante.
-  const flushSave = () => {
-    clearTimeout(saveTimerRef.current);
-    const pending = pendingSaveRef.current;
-    if (!pending) return Promise.resolve(true);
-    pendingSaveRef.current = null;
-    return persist(pending);
-  };
-
-  useEffect(() => {
-    // `projects.length === 0` seul ne suffit plus à ignorer la sauvegarde :
-    // supprimer le dernier univers actif vide `projects` tout en peuplant la
-    // corbeille — sans cette exception, cette suppression (et tout ce qui la
-    // suit) ne serait jamais persistée, et un rechargement la ferait
-    // disparaître de la corbeille comme si elle n'avait jamais eu lieu.
-    if (!mounted || isInitialLoad || (projects.length === 0 && trashItems.length === 0)) {
-      pendingSaveRef.current = null;
-      return;
-    }
-
-    const dataToSave = {
-      ...persistedData(),
-      lastActive: { projectId: activeProjectId, subProjectId: activeSubProjectId },
-    };
-
-    const serialized = syncFingerprint(dataToSave);
-    // Identique à la dernière version connue de Firestore (chargement initial
-    // ou mise à jour reçue d'un autre appareil via onSnapshot) : rien à
-    // réécrire — évite la boucle décrite dans l'effet d'auth ci-dessus.
-    if (serialized === lastSyncedRef.current) {
-      pendingSaveRef.current = null;
-      return;
-    }
-
-    // Debounce court : regroupe les changements rapprochés (ex. plusieurs
-    // champs modifiés en quelques secondes) en une seule écriture au lieu
-    // d'une requête Firestore par changement d'état.
-    pendingSaveRef.current = { dataToSave, serialized, uid: user?.uid || null, guest: isGuest };
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(saveTimerRef.current);
-    // activeProjectId & activeSubProjectId exclus : la navigation seule ne déclenche pas de sauvegarde
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, subProjects, allProjectsData, knowledgeBaseByProject, arcsByProject, trashItems, settings, mounted, user, isGuest, isInitialLoad]);
-
-  // Fermeture/rechargement de la page : écrit tout de suite ce qui attendait
-  // la fin du debounce, au lieu de le perdre.
-  useEffect(() => {
-    window.addEventListener("pagehide", flushSave);
-    return () => window.removeEventListener("pagehide", flushSave);
-    // flushSave ne lit que des refs : la version du montage reste valable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const sync = useCloudSync({
+    data: persistedData(),
+    lastActive: { projectId: activeProjectId, subProjectId: activeSubProjectId },
+    applyData,
+    resetData,
+    showToast,
+    confirm,
+  });
 
   // --- PURGE AUTOMATIQUE DE LA CORBEILLE ---
   useEffect(() => {
@@ -497,7 +209,7 @@ export function useKanbanLogic({ confirm }) {
   // — pour ne pas faire disparaître un fond déjà choisi avant cette mise à jour.
   const bgMigratedRef = useRef(false);
   useEffect(() => {
-    if (bgMigratedRef.current || !mounted || isInitialLoad) return;
+    if (bgMigratedRef.current || !sync.mounted || sync.isInitialLoad) return;
     bgMigratedRef.current = true;
 
     const legacySidebar = localStorage.getItem(LEGACY_SIDEBAR_BG_KEY);
@@ -506,97 +218,14 @@ export function useKanbanLogic({ confirm }) {
     const validMain = BACKGROUND_OPTIONS.includes(legacyMain) ? legacyMain : null;
     if (!validSidebar && !validMain) return;
 
+    // Synchronisation ponctuelle depuis une source externe (localStorage).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSettings((prev) => ({
       ...prev,
       sidebarBg: prev.sidebarBg ?? validSidebar,
       mainBg: prev.mainBg ?? validMain,
     }));
-  }, [mounted, isInitialLoad]);
-
-  // --- AUTHENTIFICATION ---
-  const handleGuestLogin = () => {
-    applyLocalData(GUEST_DATA_KEY);
-    localStorage.setItem(GUEST_SESSION_KEY, "1");
-    setIsInitialLoad(false);
-    setIsGuest(true);
-  };
-
-  const handleLogout = async () => {
-    // Écrit les dernières modifications avant de vider l'état (sinon
-    // l'effet de sauvegarde, voyant des données vides, les abandonne).
-    flushSave();
-
-    if (user) {
-      const synced = await Promise.race([
-        waitForPendingWrites(db).then(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), LOGOUT_SYNC_TIMEOUT_MS)),
-      ]);
-      if (
-        !synced &&
-        !(await confirm({
-          title: "Modifications non synchronisées",
-          message:
-            "Certaines modifications n’ont pas encore été envoyées (pas de connexion ?). " +
-            "Se déconnecter maintenant les effacera de cet appareil.",
-          confirmLabel: "Se déconnecter quand même",
-          danger: true,
-        }))
-      ) {
-        return;
-      }
-      const uid = user.uid;
-      await signOut(auth);
-      await purgeDeviceCacheAndReload(uid);
-      return;
-    }
-
-    localStorage.removeItem(GUEST_SESSION_KEY);
-    setIsGuest(false);
-    resetAllState();
-    setUser(null);
-  };
-
-  const resetAllState = () => {
-    setProjects([]);
-    setSubProjects({});
-    setAllProjectsData({});
-    setKnowledgeBaseByProject({});
-    setArcsByProject({});
-    setTrashItems([]);
-    setActiveProjectId(null);
-    setActiveSubProjectId(null);
-    setActivePage(null);
-    setSettings(DEFAULT_SETTINGS);
-    setStorageUsage(null);
-    usageLevelRef.current = "ok";
-  };
-
-  // Sur un ordinateur partagé, rien du compte ne doit rester lisible après
-  // déconnexion : copie locale et cache Firestore (IndexedDB). terminate()
-  // est requis avant la purge du cache et rend `db` inutilisable, d'où le
-  // rechargement de la page.
-  const purgeDeviceCacheAndReload = async (uid) => {
-    localStorage.removeItem(userDataKey(uid));
-    try {
-      await terminate(db);
-      await clearIndexedDbPersistence(db);
-    } catch (error) {
-      console.error("Purge du cache Firestore impossible :", error);
-    }
-    window.location.reload();
-  };
-
-  // Firebase exige une connexion récente pour supprimer un compte : si elle
-  // date, on redemande la connexion Google avant de réessayer.
-  const deleteCurrentAccount = async () => {
-    try {
-      await deleteUser(auth.currentUser);
-    } catch (error) {
-      if (error?.code !== "auth/requires-recent-login") throw error;
-      await reauthenticateWithPopup(auth.currentUser, googleProvider);
-      await deleteUser(auth.currentUser);
-    }
-  };
+  }, [sync.mounted, sync.isInitialLoad]);
 
   // --- NAVIGATION ---
   const handleSelectSubProject = (projectId, subProjectId) => {
@@ -991,83 +620,28 @@ export function useKanbanLogic({ confirm }) {
     const problem = validateBackup(data);
     if (problem) return { ok: false, message: problem };
 
-    clearTimeout(saveTimerRef.current);
-    pendingSaveRef.current = null;
+    sync.cancelPendingSave();
     setActivePage(null);
-    applyData(data, { guest: isGuest });
-    // applyData tient ces données pour déjà synchronisées : on efface cette
-    // référence pour que l'effet de sauvegarde les écrive bien.
-    lastSyncedRef.current = null;
+    applyData(data);
+    // Écrit les données importées même si elles ressemblent à la dernière
+    // version synchronisée.
+    sync.markUnsynced();
     showToast("success", "Sauvegarde importée.");
     return { ok: true };
   };
 
-  // Supprime toutes les données — et, sur demande, le compte Firebase.
-  // Renvoie { ok, message } : les Paramètres n'annoncent la suppression que
-  // si elle a réellement eu lieu (ou est en file d'attente hors-ligne).
-  const deleteAllData = async ({ deleteAccount = false } = {}) => {
-    // Abandonne toute sauvegarde en attente : elle réécrirait les données
-    // qu'on est en train de supprimer.
-    clearTimeout(saveTimerRef.current);
-    pendingSaveRef.current = null;
-
-    if (!user) {
-      resetAllState();
-      if (isGuest) localStorage.removeItem(GUEST_DATA_KEY);
-      return { ok: true };
-    }
-
-    // deleteDoc ne se résout qu'à la confirmation du serveur : hors-ligne,
-    // la suppression reste dans la file persistante de Firestore et sera
-    // appliquée à la reconnexion. L'état local n'est vidé qu'ensuite, pour
-    // ne rien effacer à l'écran si la suppression est refusée.
-    const uid = user.uid;
-    const outcome = await Promise.race([
-      deleteDoc(doc(db, "users", uid)).then(
-        () => "done",
-        (error) => {
-          console.error("Erreur lors de la suppression :", error);
-          return "error";
-        }
-      ),
-      new Promise((resolve) => setTimeout(() => resolve("queued"), DELETE_SYNC_TIMEOUT_MS)),
-    ]);
-    if (outcome === "error") {
-      return { ok: false, message: "La suppression a échoué : vérifiez votre connexion puis réessayez." };
-    }
-    resetAllState();
-    lastSyncedRef.current = null;
-    localStorage.removeItem(userDataKey(uid));
-
-    if (!deleteAccount) {
-      return outcome === "queued"
-        ? { ok: true, message: "Suppression enregistrée : elle sera finalisée à la prochaine connexion." }
-        : { ok: true };
-    }
-    if (outcome === "queued") {
-      return {
-        ok: false,
-        message: "Données supprimées, mais une connexion est nécessaire pour supprimer le compte. Réessayez une fois en ligne.",
-      };
-    }
-    try {
-      await deleteCurrentAccount();
-    } catch (error) {
-      console.error("Erreur lors de la suppression du compte :", error);
-      return { ok: false, message: "Données supprimées, mais le compte n'a pas pu être supprimé. Réessayez." };
-    }
-    await purgeDeviceCacheAndReload(uid);
-    return { ok: true };
-  };
-
   return {
-    mounted,
-    user,
-    isGuest,
-    loading,
-    isAuthModalOpen,
-    setIsAuthModalOpen,
-    handleGuestLogin,
+    mounted: sync.mounted,
+    user: sync.user,
+    isGuest: sync.isGuest,
+    loading: sync.loading,
+    isAuthModalOpen: sync.isAuthModalOpen,
+    setIsAuthModalOpen: sync.setIsAuthModalOpen,
+    handleGuestLogin: sync.handleGuestLogin,
+    handleLogout: sync.handleLogout,
+    flushSave: sync.flushSave,
+    storageUsage: sync.storageUsage,
+    deleteAllData: sync.deleteAllData,
     projects,
     subProjects,
     activeProjectId,
@@ -1093,14 +667,10 @@ export function useKanbanLogic({ confirm }) {
     toast,
     showToast,
     dismissToast,
-    flushSave,
-    storageUsage,
     exportAllData,
     exportAllDataZip,
     importBackup,
-    deleteAllData,
     trashItems,
-    handleLogout,
     handleCreateProject,
     handleRenameProject,
     deleteProject,
