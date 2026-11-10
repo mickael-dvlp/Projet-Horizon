@@ -14,7 +14,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("updater:status", listener);
   },
   onConfirmClose: (callback) => {
-    const listener = () => callback();
+    // Accusé de réception immédiat : sans lui, le processus principal
+    // considère la page comme figée et ferme la fenêtre au bout d'un délai.
+    const listener = () => {
+      ipcRenderer.send("app:confirm-close-ack");
+      callback();
+    };
     ipcRenderer.on("app:confirm-close", listener);
     return () => ipcRenderer.removeListener("app:confirm-close", listener);
   },

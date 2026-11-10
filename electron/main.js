@@ -1,8 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
-const http = require("http");
-const fs = require("fs");
+const { startStaticServer } = require("./staticServer");
 
 // Port fixe (et non aléatoire) : Chromium isole le localStorage/IndexedDB par
 // origine (protocole+hôte+port). Un port différent à chaque lancement — donc
@@ -10,65 +9,34 @@ const fs = require("fs");
 // et les préférences locales à chaque redémarrage de l'app.
 const APP_PORT = 47893;
 
-const MIME_TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".webmanifest": "application/manifest+json",
-  ".txt": "text/plain; charset=utf-8",
-};
+// Délai pour que la page accuse réception d'une demande de fermeture. Sans
+// accusé (page plantée, figée, ou page d'erreur sans la modale), la fenêtre
+// se ferme directement au lieu de rester impossible à fermer.
+const CLOSE_ACK_TIMEOUT_MS = 1500;
 
-// L'export statique Next.js doit être servi via http (et non file://) pour
-// que les chemins absolus des assets (/_next/...) se résolvent correctement.
-function startStaticServer(rootDir, port) {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      let urlPath = decodeURIComponent(req.url.split("?")[0]);
-      // Tester le suffixe "/" sur le chemin d'URL (toujours en slashes) avant
-      // de le joindre : path.join normalise en "\" sous Windows, ce qui
-      // ferait échouer ce test s'il était fait après coup.
-      if (urlPath.endsWith("/")) urlPath += "index.html";
-      const filePath = path.join(rootDir, urlPath);
-      if (!path.normalize(filePath).startsWith(path.normalize(rootDir))) {
-        res.writeHead(403);
-        res.end();
-        return;
-      }
+// Seules fenêtres que l'app a le droit d'ouvrir elle-même : la fenêtre de
+// connexion Google de Firebase Auth (signInWithPopup).
+function isAuthPopupUrl(target) {
+  if (target === "about:blank") return true;
+  try {
+    const { protocol, hostname } = new URL(target);
+    return (
+      protocol === "https:" &&
+      (hostname.endsWith(".firebaseapp.com") ||
+        hostname.endsWith(".web.app") ||
+        hostname === "accounts.google.com")
+    );
+  } catch {
+    return false;
+  }
+}
 
-      fs.readFile(filePath, (err, data) => {
-        if (err) {
-          // Pages Next.js exportées en <route>.html plutôt que <route>/index.html
-          fs.readFile(`${filePath}.html`, (err2, data2) => {
-            if (err2) {
-              fs.readFile(path.join(rootDir, "404.html"), (err3, data3) => {
-                res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-                res.end(err3 ? "Not found" : data3);
-              });
-              return;
-            }
-            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-            res.end(data2);
-          });
-          return;
-        }
-        const ext = path.extname(filePath);
-        res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
-        res.end(data);
-      });
-    });
-
-    server.once("error", reject);
-    server.listen(port, "localhost", () => resolve(server));
-  });
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 let server;
@@ -80,9 +48,17 @@ let mainWindow;
 // le processus principal bloque la fermeture, demande confirmation à la
 // page, et n'autorise réellement la fermeture qu'à sa réponse.
 let closeConfirmed = false;
+let closeAckTimer = null;
+
+function forceClose() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  closeConfirmed = true;
+  mainWindow.close();
+}
 
 async function createWindow(url) {
   closeConfirmed = false;
+  const appOrigin = originOf(url);
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -98,20 +74,47 @@ async function createWindow(url) {
     },
   });
 
+  // Popups : uniquement la connexion Google ; tout autre lien http(s) part
+  // dans le navigateur par défaut, le reste est refusé.
+  mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (isAuthPopupUrl(target)) return { action: "allow" };
+    if (/^https?:\/\//i.test(target)) shell.openExternal(target);
+    return { action: "deny" };
+  });
+
+  // La fenêtre principale ne quitte jamais l'app (elle a accès au preload).
+  mainWindow.webContents.on("will-navigate", (event) => {
+    if (originOf(event.url) !== appOrigin) event.preventDefault();
+  });
+
   mainWindow.on("close", (e) => {
-    if (closeConfirmed) return;
+    if (closeConfirmed || mainWindow.webContents.isCrashed()) return;
     e.preventDefault();
+    if (closeAckTimer) return;
     mainWindow.webContents.send("app:confirm-close");
+    closeAckTimer = setTimeout(() => {
+      closeAckTimer = null;
+      forceClose();
+    }, CLOSE_ACK_TIMEOUT_MS);
   });
 
   await mainWindow.loadURL(url);
 }
 
-ipcMain.on("app:confirm-close-response", (_event, confirmed) => {
-  if (confirmed && mainWindow && !mainWindow.isDestroyed()) {
-    closeConfirmed = true;
-    mainWindow.close();
-  }
+const isFromMainWindow = (event) =>
+  !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents;
+
+// La page a bien reçu la demande et affiche la confirmation : on attend
+// désormais la décision de l'utilisateur, sans limite de temps.
+ipcMain.on("app:confirm-close-ack", (event) => {
+  if (!isFromMainWindow(event)) return;
+  clearTimeout(closeAckTimer);
+  closeAckTimer = null;
+});
+
+ipcMain.on("app:confirm-close-response", (event, confirmed) => {
+  if (!isFromMainWindow(event)) return;
+  if (confirmed) forceClose();
 });
 
 function sendUpdateStatus(status) {
