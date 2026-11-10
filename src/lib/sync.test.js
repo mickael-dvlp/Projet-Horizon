@@ -4,7 +4,6 @@ import {
   syncFingerprint,
   computeStorageUsage,
   FIRESTORE_DOC_LIMIT,
-  LOCAL_STORAGE_LIMIT,
 } from "./sync";
 
 describe("stableStringify", () => {
@@ -34,21 +33,15 @@ describe("syncFingerprint", () => {
 });
 
 describe("computeStorageUsage", () => {
-  it("mesure en octets pour un compte (accents sur 2 octets)", () => {
-    const usage = computeStorageUsage("é", false);
+  it("mesure en octets (accents sur 2 octets)", () => {
+    const usage = computeStorageUsage("é");
     expect(usage.used).toBe(2);
     expect(usage.limit).toBe(FIRESTORE_DOC_LIMIT);
     expect(usage.level).toBe("ok");
   });
 
-  it("mesure en caractères pour un invité", () => {
-    const usage = computeStorageUsage("é", true);
-    expect(usage.used).toBe(1);
-    expect(usage.limit).toBe(LOCAL_STORAGE_LIMIT);
-  });
-
   it("signale les seuils de 80 % et 95 %", () => {
-    expect(computeStorageUsage("x".repeat(Math.ceil(FIRESTORE_DOC_LIMIT * 0.8)), false).level).toBe("warning");
-    expect(computeStorageUsage("x".repeat(Math.ceil(FIRESTORE_DOC_LIMIT * 0.95)), false).level).toBe("critical");
+    expect(computeStorageUsage("x".repeat(Math.ceil(FIRESTORE_DOC_LIMIT * 0.8))).level).toBe("warning");
+    expect(computeStorageUsage("x".repeat(Math.ceil(FIRESTORE_DOC_LIMIT * 0.95))).level).toBe("critical");
   });
 });

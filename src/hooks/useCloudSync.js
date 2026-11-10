@@ -3,14 +3,23 @@ import { auth, db, googleProvider } from "@/firebase/config";
 import { onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup } from "firebase/auth";
 import {
   doc,
-  setDoc,
-  deleteDoc,
+  collection,
   onSnapshot,
+  writeBatch,
   waitForPendingWrites,
   terminate,
   clearIndexedDbPersistence,
 } from "firebase/firestore";
-import { syncFingerprint, computeStorageUsage, USAGE_LEVEL_RANK } from "@/lib/sync";
+import { syncFingerprint, stableStringify, computeStorageUsage, USAGE_LEVEL_RANK } from "@/lib/sync";
+import {
+  splitContents,
+  mergeContents,
+  collectIds,
+  planContentWrites,
+  chunk,
+  hasInlineContents,
+} from "@/lib/contentStore";
+import { readLocalRecord, writeLocalRecord, deleteLocalRecord } from "@/lib/localStore";
 
 // Marqueur localStorage distinct des données elles-mêmes : indique qu'une
 // session invité était active, pour la restaurer après un rechargement.
@@ -18,16 +27,36 @@ const GUEST_SESSION_KEY = "horizon-guest-session";
 const GUEST_DATA_KEY = "kanban-data-guest";
 const userDataKey = (uid) => `kanban-data-${uid}`;
 
+// Version du format Firestore : 2 = textes stockés dans users/{uid}/contents
+// (cf. lib/contentStore.js) ; absente = ancien format, textes dans le
+// document principal, migré automatiquement à la première sauvegarde.
+const SCHEMA_VERSION = 2;
+// Marge sous la limite de 500 opérations d'une écriture groupée Firestore.
+const MAX_BATCH_OPS = 400;
+
 const SAVE_DEBOUNCE_MS = 500;
 // Attente maximale de la synchronisation avant déconnexion / suppression.
 const LOGOUT_SYNC_TIMEOUT_MS = 3000;
 const DELETE_SYNC_TIMEOUT_MS = 5000;
 
 const delay = (ms, value) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+const userDoc = (uid) => doc(db, "users", uid);
+const contentDoc = (uid, id) => doc(db, "users", uid, "contents", id);
+
+// Copie locale d'un compte (secours si Firestore est injoignable au premier
+// chargement) : localStorage, données brutes.
+function readUserCopy(uid) {
+  try {
+    const saved = localStorage.getItem(userDataKey(uid));
+    return saved ? JSON.parse(saved) : null;
+  } catch {
+    return null;
+  }
+}
 
 // Connexion (compte Google ou invité), chargement et sauvegarde des données :
-// document Firestore users/{uid} pour un compte, localStorage pour un invité,
-// avec une copie locale dans les deux cas.
+// Firestore pour un compte (document users/{uid} + un document par texte,
+// avec une copie locale de secours), IndexedDB + localStorage pour un invité.
 //
 // Ce hook ne connaît pas la structure des données ; useKanbanLogic fournit :
 // - `data` : l'objet à sauvegarder (hors navigation) ;
@@ -52,20 +81,23 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
   const pendingSaveRef = useRef(null);
   const saveTimerRef = useRef(null);
   const usageLevelRef = useRef("ok");
-  // Écoute Firestore active (onSnapshot) pour l'utilisateur courant, à fermer
-  // dès qu'elle change (changement de compte, déconnexion, démontage).
+  // Écoutes Firestore actives pour l'utilisateur courant, à fermer dès
+  // qu'il change (changement de compte, déconnexion, démontage).
   const docUnsubRef = useRef(null);
-  // Dernière version des données connue comme déjà synchronisée avec
-  // Firestore (chargement initial ou mise à jour reçue via onSnapshot) —
-  // sert de référence à l'effet de sauvegarde pour ne pas réécrire ce qui
-  // vient tout juste d'être lu.
+  // Dernière version des données connue comme déjà synchronisée (chargement
+  // ou mise à jour reçue d'un autre appareil) — sert de référence à l'effet
+  // de sauvegarde pour ne pas réécrire ce qui vient tout juste d'être lu.
   const lastSyncedRef = useRef(null);
+  // Textes (id → contenu) et document principal tels qu'enregistrés dans
+  // Firestore : seules les différences sont réécrites.
+  const lastContentsRef = useRef({});
+  const lastMainRef = useRef(null);
 
-  // --- ESPACE DE STOCKAGE ---
-  // Avertit une fois à chaque franchissement de seuil (80 %, puis 95 %) de
-  // l'espace disponible : au-delà de 100 %, toutes les sauvegardes échouent.
-  const trackStorageUsage = (serialized, guest) => {
-    const usage = computeStorageUsage(serialized, guest);
+  // --- ESPACE DE STOCKAGE (document Firestore principal) ---
+  // Avertit une fois à chaque franchissement de seuil (80 %, puis 95 %) :
+  // au-delà de 100 %, le document principal ne pourrait plus être écrit.
+  const trackStorageUsage = (serializedMain) => {
+    const usage = computeStorageUsage(serializedMain);
     setStorageUsage(usage);
     const previous = usageLevelRef.current;
     usageLevelRef.current = usage.level;
@@ -74,7 +106,7 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     showToast(
       "error",
       usage.level === "critical"
-        ? `Espace de stockage presque plein (${percent} %) : videz la corbeille ou exportez puis supprimez d'anciens contenus.`
+        ? `Espace de stockage presque plein (${percent} %) : videz la corbeille ou supprimez d'anciens éléments.`
         : `Espace de stockage utilisé à ${percent} % : pensez à vider la corbeille.`
     );
   };
@@ -86,55 +118,99 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
   };
 
   // --- CHARGEMENT ---
-  // `guest` : données du stockage invité (limite de taille différente).
+  // `guest` : pas de jauge (le stockage local d'un invité n'a pas la limite
+  // de taille d'un document Firestore).
   const load = (raw, { isRemote = false, guest = false } = {}) => {
-    lastSyncedRef.current = syncFingerprint(applyData(raw, { isRemote }));
-    trackStorageUsage(lastSyncedRef.current, guest);
+    const loaded = applyData(raw, { isRemote });
+    lastSyncedRef.current = syncFingerprint(loaded);
+    if (!guest) trackStorageUsage(stableStringify(splitContents(loaded).main));
   };
 
-  // Charge une copie locale (localStorage) ; données vides si absente ou
-  // illisible.
-  const loadLocal = (key) => {
-    const guest = key === GUEST_DATA_KEY;
-    const saved = localStorage.getItem(key);
-    try {
-      load(saved ? JSON.parse(saved) : {}, { guest });
-    } catch {
-      load({}, { guest });
-    }
+  // Document Firestore principal + textes (users/{uid}/contents). Ancien
+  // format (textes dans le document principal) : la sauvegarde suivante est
+  // forcée pour les déplacer dans leurs propres documents.
+  const loadFromFirestore = (raw, contents, { isRemote }) => {
+    lastContentsRef.current = contents;
+    lastMainRef.current = null;
+    load(mergeContents(raw, contents), { isRemote });
+    if (raw.schemaVersion !== SCHEMA_VERSION && hasInlineContents(raw)) lastSyncedRef.current = null;
+  };
+
+  // Copie locale de secours d'un compte (Firestore injoignable ou document
+  // absent) : rien n'est encore connu côté serveur, tout sera écrit.
+  const loadUserCopy = (uid) => {
+    lastContentsRef.current = {};
+    lastMainRef.current = null;
+    load(readUserCopy(uid) || {});
+  };
+
+  const loadGuest = async () => {
+    load((await readLocalRecord(GUEST_DATA_KEY)) || {}, { guest: true });
   };
 
   // --- SAUVEGARDE ---
-  // Écrit d'abord la copie locale (synchrone), puis lance l'écriture
-  // Firestore SANS l'attendre pour enchaîner les suivantes : setDoc ne se
-  // résout qu'une fois l'écriture confirmée par le serveur, donc jamais tant
-  // qu'on est hors-ligne — l'attendre bloquait toutes les sauvegardes
-  // suivantes en mémoire, perdues à la fermeture de l'app. Le SDK applique
-  // de toute façon les écritures d'un même client dans leur ordre d'émission.
-  // Renvoie une promesse résolue à true/false une fois l'écriture distante
-  // confirmée ou refusée (utile pour attendre avant de fermer l'app).
+  // Écritures Firestore d'une sauvegarde : textes nouveaux ou modifiés, puis
+  // document principal (s'il a changé), puis suppression des textes des
+  // éléments supprimés définitivement. Ordre volontaire : le document
+  // principal ne référence jamais un texte pas encore écrit. Les écritures
+  // d'un même client sont appliquées par Firestore dans leur ordre d'émission.
+  const writeToFirestore = (uid, dataToSave) => {
+    const { main, contents } = splitContents(dataToSave);
+    const serializedMain = stableStringify(main);
+    const { upserts, deletes } = planContentWrites(lastContentsRef.current, contents, collectIds(main));
+    lastContentsRef.current = contents;
+    trackStorageUsage(serializedMain);
+
+    const batches = chunk(upserts, MAX_BATCH_OPS).map((group) => {
+      const batch = writeBatch(db);
+      group.forEach(([id, content]) => batch.set(contentDoc(uid, id), { content }));
+      return batch;
+    });
+    if (serializedMain !== lastMainRef.current) {
+      lastMainRef.current = serializedMain;
+      const batch = writeBatch(db);
+      batch.set(userDoc(uid), { ...main, schemaVersion: SCHEMA_VERSION });
+      batches.push(batch);
+    }
+    chunk(deletes, MAX_BATCH_OPS).forEach((group) => {
+      const batch = writeBatch(db);
+      group.forEach((id) => batch.delete(contentDoc(uid, id)));
+      batches.push(batch);
+    });
+    return Promise.all(batches.map((batch) => batch.commit()));
+  };
+
+  // Écrit la copie locale, puis lance les écritures distantes SANS les
+  // attendre pour enchaîner les suivantes : une écriture Firestore ne se
+  // résout qu'une fois confirmée par le serveur, donc jamais tant qu'on est
+  // hors-ligne — l'attendre bloquait toutes les sauvegardes suivantes en
+  // mémoire, perdues à la fermeture de l'app.
+  // Renvoie une promesse résolue à true/false une fois l'écriture terminée
+  // ou refusée (utile pour attendre avant de fermer l'app).
   const persist = ({ dataToSave, serialized, uid, guest }) => {
     if (!uid && !guest) return Promise.resolve(true);
     lastSyncedRef.current = serialized;
-    trackStorageUsage(serialized, guest);
+
+    if (!uid) {
+      return writeLocalRecord(GUEST_DATA_KEY, dataToSave).then((saved) => {
+        if (!saved) {
+          if (lastSyncedRef.current === serialized) lastSyncedRef.current = null;
+          showToast("error", "Échec de l'enregistrement local : vos dernières modifications n'ont pas pu être enregistrées.");
+        }
+        return saved;
+      });
+    }
 
     try {
-      localStorage.setItem(uid ? userDataKey(uid) : GUEST_DATA_KEY, JSON.stringify(dataToSave));
+      localStorage.setItem(userDataKey(uid), JSON.stringify(dataToSave));
     } catch (error) {
-      console.error("Erreur lors de la copie locale :", error);
-      if (guest) {
-        // En mode invité, le stockage local est la seule copie.
-        lastSyncedRef.current = null;
-        showToast("error", "Stockage local plein : vos dernières modifications n'ont pas pu être enregistrées.");
-        return Promise.resolve(false);
-      }
-      showToast("error", "Copie locale impossible (stockage plein) ; la synchronisation en ligne continue.");
+      // Simple copie de secours : Firestore garde déjà les données hors-ligne.
+      console.warn("Copie locale de secours impossible :", error);
     }
-    if (!uid) return Promise.resolve(true);
 
     let write;
     try {
-      write = setDoc(doc(db, "users", uid), dataToSave);
+      write = writeToFirestore(uid, dataToSave);
     } catch (error) {
       write = Promise.reject(error);
     }
@@ -142,8 +218,10 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
       () => true,
       (error) => {
         console.error("Erreur lors de la sauvegarde :", error);
-        // Autorise une nouvelle tentative au prochain changement.
+        // Tout sera réécrit à la prochaine tentative.
         if (lastSyncedRef.current === serialized) lastSyncedRef.current = null;
+        lastContentsRef.current = {};
+        lastMainRef.current = null;
         showToast("error", "Échec de l'enregistrement en ligne : vérifiez votre connexion.");
         return false;
       }
@@ -173,14 +251,85 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     lastSyncedRef.current = null;
   };
 
+  // Écoute du document principal et des textes d'un compte. Les deux vues
+  // sont toujours mémorisées dans leur dernier état local (y compris nos
+  // propres écritures en attente), mais ne sont réappliquées à l'état de
+  // l'app que pour un changement venu du serveur.
+  const listenToUser = (uid) => {
+    let isFirst = true;
+    let mainSnap = null;
+    let contents = null;
+
+    const finishFirstLoad = (loadFn) => {
+      isFirst = false;
+      loadFn();
+      setIsInitialLoad(false);
+      setLoading(false);
+    };
+
+    const apply = () => {
+      if (!mainSnap || !contents) return;
+      if (isFirst) {
+        finishFirstLoad(() =>
+          mainSnap.exists()
+            ? loadFromFirestore(mainSnap.data(), contents, { isRemote: false })
+            : loadUserCopy(uid)
+        );
+        return;
+      }
+      // Changement fait depuis un autre appareil. Si des modifications
+      // locales attendent encore leur sauvegarde (debounce), elles sont
+      // envoyées d'abord et ce changement est ignoré : l'appliquer les
+      // effacerait sans qu'elles aient jamais été enregistrées.
+      if (pendingSaveRef.current) {
+        flushSave();
+        return;
+      }
+      if (mainSnap.exists()) loadFromFirestore(mainSnap.data(), contents, { isRemote: true });
+    };
+
+    const onError = (error) => {
+      console.error("Erreur d'écoute Firestore :", error);
+      if (isFirst) finishFirstLoad(() => loadUserCopy(uid));
+    };
+
+    // Ignore l'écho de nos propres écritures pas encore confirmées par le
+    // serveur : sans ce garde-fou, chaque sauvegarde redéclencherait aussitôt
+    // le chargement -> effet de sauvegarde -> écriture -> nouvel écho, en
+    // boucle. La toute première lecture n'est jamais filtrée, pour ne jamais
+    // rester bloqué sur "Chargement...".
+    const unsubMain = onSnapshot(
+      userDoc(uid),
+      (snap) => {
+        mainSnap = snap;
+        if (!isFirst && snap.metadata.hasPendingWrites) return;
+        apply();
+      },
+      onError
+    );
+    const unsubContents = onSnapshot(
+      collection(db, "users", uid, "contents"),
+      (snap) => {
+        contents = Object.fromEntries(snap.docs.map((d) => [d.id, d.data().content]));
+        if (!isFirst && snap.metadata.hasPendingWrites) return;
+        apply();
+      },
+      onError
+    );
+    return () => {
+      unsubMain();
+      unsubContents();
+    };
+  };
+
   // --- AUTH & CHARGEMENT ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
 
       // Un changement de compte (ou une déconnexion) ferme l'écoute
-      // précédente : sinon un document Firestore d'un compte différent
-      // pourrait encore arriver après coup et mélanger les données.
+      // précédente : sinon des données d'un compte différent pourraient
+      // encore arriver après coup et se mélanger.
       if (docUnsubRef.current) {
         docUnsubRef.current();
         docUnsubRef.current = null;
@@ -193,56 +342,17 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
         // et créer un univers à ce moment écrasait tout le document distant.
         setLoading(true);
         setIsInitialLoad(true);
-        let isFirstSnapshot = true;
-        docUnsubRef.current = onSnapshot(
-          doc(db, "users", currentUser.uid),
-          (docSnap) => {
-            // Ignore l'écho de nos propres écritures pas encore confirmées
-            // par le serveur (setDoc local) : sans ce garde-fou, chaque
-            // sauvegarde redéclenche aussitôt le chargement -> effet de
-            // sauvegarde -> setDoc -> nouvel écho, en boucle. La toute
-            // première lecture (chargement/reconnexion) n'est jamais
-            // filtrée, pour ne jamais rester bloqué sur "Chargement...".
-            if (!isFirstSnapshot && docSnap.metadata.hasPendingWrites) return;
-
-            if (isFirstSnapshot) {
-              isFirstSnapshot = false;
-              if (docSnap.exists()) load(docSnap.data());
-              else loadLocal(userDataKey(currentUser.uid));
-              setIsInitialLoad(false);
-              setLoading(false);
-              return;
-            }
-
-            // Changement fait depuis un autre appareil. Si des modifications
-            // locales attendent encore leur sauvegarde (debounce), elles sont
-            // envoyées d'abord et ce snapshot est ignoré : l'appliquer les
-            // effacerait sans qu'elles aient jamais été enregistrées.
-            if (pendingSaveRef.current) {
-              flushSave();
-              return;
-            }
-            if (docSnap.exists()) load(docSnap.data(), { isRemote: true });
-          },
-          (error) => {
-            console.error("Erreur d'écoute Firestore :", error);
-            if (isFirstSnapshot) {
-              isFirstSnapshot = false;
-              loadLocal(userDataKey(currentUser.uid));
-              setIsInitialLoad(false);
-              setLoading(false);
-            }
-          }
-        );
+        docUnsubRef.current = listenToUser(currentUser.uid);
       } else if (localStorage.getItem(GUEST_SESSION_KEY) === "1") {
         // Restaure la session invité après un rechargement complet : sans ce
         // marqueur, seul le state React `isGuest` (jamais persisté) faisait
         // foi, donc tout `reload()` ramenait à l'écran de connexion malgré
-        // des données invité toujours présentes dans localStorage.
-        loadLocal(GUEST_DATA_KEY);
-        setIsGuest(true);
-        setIsInitialLoad(false);
-        setLoading(false);
+        // des données invité toujours présentes.
+        loadGuest().finally(() => {
+          setIsGuest(true);
+          setIsInitialLoad(false);
+          setLoading(false);
+        });
       } else {
         setIsInitialLoad(false);
         setLoading(false);
@@ -276,9 +386,9 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
 
     const dataToSave = { ...data, lastActive };
     const serialized = syncFingerprint(dataToSave);
-    // Identique à la dernière version connue de Firestore (chargement initial
-    // ou mise à jour reçue d'un autre appareil via onSnapshot) : rien à
-    // réécrire — évite la boucle décrite dans l'effet d'auth ci-dessus.
+    // Identique à la dernière version connue (chargement initial ou mise à
+    // jour reçue d'un autre appareil) : rien à réécrire — évite la boucle
+    // décrite dans listenToUser.
     if (serialized === lastSyncedRef.current) {
       pendingSaveRef.current = null;
       return;
@@ -286,7 +396,7 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
 
     // Debounce court : regroupe les changements rapprochés (ex. plusieurs
     // champs modifiés en quelques secondes) en une seule écriture au lieu
-    // d'une requête Firestore par changement d'état.
+    // d'une écriture par changement d'état.
     pendingSaveRef.current = { dataToSave, serialized, uid: user?.uid || null, guest: isGuest };
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
@@ -317,8 +427,8 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
   }, []);
 
   // --- CONNEXION / DÉCONNEXION ---
-  const handleGuestLogin = () => {
-    loadLocal(GUEST_DATA_KEY);
+  const handleGuestLogin = async () => {
+    await loadGuest();
     localStorage.setItem(GUEST_SESSION_KEY, "1");
     setIsInitialLoad(false);
     setIsGuest(true);
@@ -386,6 +496,19 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     }
   };
 
+  // Supprime le document principal et tous les textes d'un compte.
+  const deleteFromFirestore = (uid) => {
+    const batches = chunk(Object.keys(lastContentsRef.current), MAX_BATCH_OPS).map((group) => {
+      const batch = writeBatch(db);
+      group.forEach((id) => batch.delete(contentDoc(uid, id)));
+      return batch;
+    });
+    const last = writeBatch(db);
+    last.delete(userDoc(uid));
+    batches.push(last);
+    return Promise.all(batches.map((batch) => batch.commit()));
+  };
+
   // Supprime toutes les données — et, sur demande, le compte Firebase.
   // Renvoie { ok, message } : les Paramètres n'annoncent la suppression que
   // si elle a réellement eu lieu (ou est en file d'attente hors-ligne).
@@ -396,17 +519,17 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
 
     if (!user) {
       resetAll();
-      if (isGuest) localStorage.removeItem(GUEST_DATA_KEY);
+      if (isGuest) await deleteLocalRecord(GUEST_DATA_KEY);
       return { ok: true };
     }
 
-    // deleteDoc ne se résout qu'à la confirmation du serveur : hors-ligne,
-    // la suppression reste dans la file persistante de Firestore et sera
-    // appliquée à la reconnexion. L'état local n'est vidé qu'ensuite, pour
-    // ne rien effacer à l'écran si la suppression est refusée.
+    // Les suppressions ne se résolvent qu'à la confirmation du serveur :
+    // hors-ligne, elles restent dans la file persistante de Firestore et
+    // seront appliquées à la reconnexion. L'état local n'est vidé qu'ensuite,
+    // pour ne rien effacer à l'écran si la suppression est refusée.
     const uid = user.uid;
     const outcome = await Promise.race([
-      deleteDoc(doc(db, "users", uid)).then(
+      deleteFromFirestore(uid).then(
         () => "done",
         (error) => {
           console.error("Erreur lors de la suppression :", error);
@@ -420,6 +543,8 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     }
     resetAll();
     markUnsynced();
+    lastContentsRef.current = {};
+    lastMainRef.current = null;
     localStorage.removeItem(userDataKey(uid));
 
     if (!deleteAccount) {

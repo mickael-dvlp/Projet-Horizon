@@ -1,7 +1,5 @@
-// Limites de stockage : 1 Mio par document Firestore (compte connecté), et
-// ~5 millions de caractères pour le localStorage de Chromium (invité).
+// Taille maximale d'un document Firestore (1 Mio).
 export const FIRESTORE_DOC_LIMIT = 1_048_576;
-export const LOCAL_STORAGE_LIMIT = 5_000_000;
 const USAGE_WARNING_RATIO = 0.8;
 const USAGE_CRITICAL_RATIO = 0.95;
 
@@ -31,11 +29,12 @@ export function syncFingerprint(data) {
   return stableStringify(content);
 }
 
-// Part de l'espace disponible occupée par des données sérialisées, et niveau
-// d'alerte correspondant ("ok", "warning" à 80 %, "critical" à 95 %).
-export function computeStorageUsage(serialized, isGuest) {
-  const used = isGuest ? serialized.length : new TextEncoder().encode(serialized).length;
-  const limit = isGuest ? LOCAL_STORAGE_LIMIT : FIRESTORE_DOC_LIMIT;
+// Part de la taille maximale d'un document Firestore occupée par des données
+// sérialisées, et niveau d'alerte correspondant ("ok", "warning" à 80 %,
+// "critical" à 95 %).
+export function computeStorageUsage(serialized) {
+  const used = new TextEncoder().encode(serialized).length;
+  const limit = FIRESTORE_DOC_LIMIT;
   const ratio = used / limit;
   const level =
     ratio >= USAGE_CRITICAL_RATIO ? "critical" : ratio >= USAGE_WARNING_RATIO ? "warning" : "ok";
