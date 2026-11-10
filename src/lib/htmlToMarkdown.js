@@ -1,8 +1,10 @@
 // Convertit le HTML produit par l'éditeur (contentEditable) en Markdown.
-// Utilise le DOM du navigateur : client-only.
+// Utilise le DOM du navigateur : client-only. DOMParser produit un document
+// inerte : contrairement à innerHTML sur un élément de la page, aucun
+// gestionnaire (ex. <img onerror>) ne s'y exécute et aucune ressource n'est
+// chargée — le contenu exporté n'est pas forcément passé par DOMPurify.
 export function htmlToMarkdown(html) {
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
+  const tmp = new DOMParser().parseFromString(html || "", "text/html").body;
 
   const walk = (node) => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent;

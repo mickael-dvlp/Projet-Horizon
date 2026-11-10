@@ -7,7 +7,14 @@ import { buildUniverseSummary } from "@/lib/universeSummary";
 import { triggerDownload, sanitizeFilename } from "@/lib/download";
 import { restoreTrashItem } from "@/lib/trashRestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, setDoc, onSnapshot } from "firebase/firestore";
+import {
+  doc,
+  setDoc,
+  onSnapshot,
+  waitForPendingWrites,
+  terminate,
+  clearIndexedDbPersistence,
+} from "firebase/firestore";
 import { BACKGROUND_OPTIONS } from "@/lib/backgrounds";
 
 // Marqueur localStorage distinct des données elles-mêmes : indique qu'une
@@ -23,6 +30,8 @@ const userDataKey = (uid) => `kanban-data-${uid}`;
 const DEFAULT_SETTINGS = { trashRetentionDays: 30, sidebarBg: null, mainBg: null };
 
 const SAVE_DEBOUNCE_MS = 500;
+// Attente maximale de la synchronisation avant déconnexion.
+const LOGOUT_SYNC_TIMEOUT_MS = 3000;
 
 // Limites de stockage : 1 Mio par document Firestore (compte connecté), et
 // ~5 millions de caractères pour le localStorage de Chromium (invité).
@@ -162,6 +171,11 @@ export function useKanbanLogic() {
     const loadedArcs = data.arcsByProject || {};
     const loadedTrash = data.trash || [];
     const loadedSettings = { ...DEFAULT_SETTINGS, ...data.settings };
+    // Les fonds servent à construire un chemin d'image : seules les valeurs
+    // connues sont acceptées.
+    for (const key of ["sidebarBg", "mainBg"]) {
+      if (!BACKGROUND_OPTIONS.includes(loadedSettings[key])) loadedSettings[key] = null;
+    }
 
     setProjects(loadedProjects);
     setSubProjects(loadedSubProjects);
@@ -497,7 +511,38 @@ export function useKanbanLogic() {
     // Écrit les dernières modifications avant de vider l'état (sinon
     // l'effet de sauvegarde, voyant des données vides, les abandonne).
     flushSave();
-    if (!isGuest) await signOut(auth);
+
+    if (user) {
+      const synced = await Promise.race([
+        waitForPendingWrites(db).then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), LOGOUT_SYNC_TIMEOUT_MS)),
+      ]);
+      if (
+        !synced &&
+        !window.confirm(
+          "Certaines modifications ne sont pas encore synchronisées (pas de connexion ?). " +
+            "Se déconnecter maintenant les effacera de cet appareil. Continuer ?"
+        )
+      ) {
+        return;
+      }
+      const uid = user.uid;
+      await signOut(auth);
+      // Sur un ordinateur partagé, rien du compte ne doit rester lisible
+      // après déconnexion : copie locale et cache Firestore (IndexedDB).
+      // terminate() est requis avant la purge du cache et rend `db`
+      // inutilisable, d'où le rechargement de la page.
+      localStorage.removeItem(userDataKey(uid));
+      try {
+        await terminate(db);
+        await clearIndexedDbPersistence(db);
+      } catch (error) {
+        console.error("Purge du cache Firestore impossible :", error);
+      }
+      window.location.reload();
+      return;
+    }
+
     localStorage.removeItem(GUEST_SESSION_KEY);
     setIsGuest(false);
     setProjects([]);

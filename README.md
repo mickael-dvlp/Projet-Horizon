@@ -13,3 +13,13 @@ Expérience Drag & Drop : Interface intuitive utilisant dnd-kit pour réorganise
 Éditeur de Mémos : Système de prise de notes intégré avec sauvegarde automatique et gestion d'état centralisée.
 
 Sécurité des Données : Système de Corbeille (pages et groupes) avec restauration.
+
+Déploiement des règles Firestore :
+
+Les règles de sécurité (`firestore.rules`) ne sont pas appliquées automatiquement. Après avoir créé le projet Firebase, et à chaque modification des règles :
+
+    npx firebase-tools login
+    npx firebase-tools use --add          # choisir le projet Firebase
+    npx firebase-tools deploy --only firestore:rules
+
+Ne pas laisser la base en « mode test » : il autorise n'importe qui à lire et écrire toutes les données.
