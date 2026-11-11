@@ -75,4 +75,32 @@ test.describe("Corbeille — une restauration impossible ne détruit rien", () =
     await expect(page.getByText("Arc restauré", { exact: true })).toBeVisible();
     await expect(page.getByText("Chap-orphelin", { exact: true })).toBeVisible();
   });
+
+  test("une scène supprimée passe par la corbeille et revient dans son chapitre avec son texte", async ({ page }) => {
+    await loginAsGuest(page);
+    await createUniverse(page, "UniversScèneCorbeille");
+    await openNewChapter(page, "Chapitre scènes");
+
+    await page.getByTitle("Scènes").click();
+    await page.getByPlaceholder("Nom de la nouvelle scène...").fill("Scène à restaurer");
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await page.getByText("Scène à restaurer", { exact: true }).click();
+    await page.locator(".memo-editor").click();
+    await page.keyboard.type("texte de la scène");
+    await page.getByTitle("Retour au chapitre").click();
+
+    await page.getByLabel("Options de la scène Scène à restaurer").click();
+    await page.locator("#memo-scenes-panel").getByRole("button", { name: "Supprimer" }).click();
+    await expect(page.getByText("Scène à restaurer", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Fermer l'éditeur" }).click();
+
+    await page.getByText("Corbeille", { exact: true }).click();
+    await expect(page.getByText(/^Scène • Supprimé le/)).toBeVisible();
+    await page.getByLabel("Restaurer Scène à restaurer").click();
+    await page.getByRole("button", { name: "Fermer", exact: true }).click();
+
+    await page.getByText("Chapitre scènes", { exact: true }).click();
+    await page.getByText("Scène à restaurer", { exact: true }).click();
+    await expect(page.locator(".memo-editor")).toContainText("texte de la scène");
+  });
 });

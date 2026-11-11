@@ -462,9 +462,17 @@ export function useKanbanLogic({ confirm }) {
     handleSavePage(pageId, { scenes });
   };
 
+  // La scène part dans la corbeille avec son chapitre et sa position
+  // d'origine, pour y être remise à sa place (cf. lib/trashRestore.js).
   const deleteScene = (pageId, sceneId) => {
-    const scenes = (getPage(pageId)?.scenes || []).filter((s) => s.id !== sceneId);
-    handleSavePage(pageId, { scenes });
+    const scenes = getPage(pageId)?.scenes || [];
+    const sceneIndex = scenes.findIndex((s) => s.id === sceneId);
+    if (sceneIndex === -1) return;
+    moveToTrash({ ...scenes[sceneIndex], pageId, sceneIndex }, "scene", {
+      projectId: activeProjectId,
+      subProjectId: activeSubProjectId,
+    });
+    handleSavePage(pageId, { scenes: scenes.filter((s) => s.id !== sceneId) });
   };
 
   const handleSaveScene = (pageId, sceneId, updates) => {
@@ -557,6 +565,7 @@ export function useKanbanLogic({ confirm }) {
         knowledgeBaseByProject,
         activeProjectId,
         activeSubProjectId,
+        trash: trashItems,
       },
       item
     );
@@ -570,6 +579,7 @@ export function useKanbanLogic({ confirm }) {
     if (changes.allProjectsData) setAllProjectsData(changes.allProjectsData);
     if (changes.knowledgeBaseByProject) setKnowledgeBaseByProject(changes.knowledgeBaseByProject);
     removeFromTrash(item.trashId);
+    if (result.notice) showToast("success", result.notice);
   };
 
   // --- PARAMÈTRES ---

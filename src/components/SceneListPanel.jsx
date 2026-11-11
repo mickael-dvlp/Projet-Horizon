@@ -8,10 +8,8 @@ import MetaMenu, { MenuSeparator } from "@/components/MetaMenu";
 import { formatShortDate } from "@/lib/date";
 import { useCreateForm } from "@/hooks/useCreateForm";
 import { useInlineRename } from "@/hooks/useInlineRename";
-import { useConfirm } from "@/components/ConfirmDialog";
 
 export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelete, onUpdate }) {
-  const confirm = useConfirm();
   const [menuOpenId, setMenuOpenId] = useState(null);
   const rename = useInlineRename((title, sceneId) => onUpdate(sceneId, { title }));
   const {
@@ -105,15 +103,9 @@ export default function SceneListPanel({ id, scenes = [], onOpen, onAdd, onDelet
                     />
                     <MenuSeparator />
                     <button
-                      onClick={async () => {
+                      onClick={() => {
                         setMenuOpenId(null);
-                        const ok = await confirm({
-                          title: `Supprimer la scène « ${sceneTitle} » ?`,
-                          message: "Une scène supprimée ne passe pas par la corbeille : son texte sera perdu.",
-                          confirmLabel: "Supprimer",
-                          danger: true,
-                        });
-                        if (ok) onDelete(scene.id);
+                        onDelete(scene.id);
                       }}
                       className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 font-medium"
                     >

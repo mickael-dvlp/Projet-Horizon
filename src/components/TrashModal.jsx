@@ -8,6 +8,7 @@ import {
   Library,
   BookOpen,
   Globe,
+  Layers,
 } from "lucide-react";
 import { useRestoreFocus } from "@/hooks/useRestoreFocus";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
@@ -18,6 +19,7 @@ const TYPE_META = {
   kbFile: { label: "Fiche", icon: Library, className: "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-500 dark:text-emerald-400" },
   project: { label: "Univers", icon: Globe, className: "bg-purple-50 dark:bg-purple-500/10 text-purple-500 dark:text-purple-400" },
   subProject: { label: "Livre", icon: BookOpen, className: "bg-sky-50 dark:bg-sky-500/10 text-sky-500 dark:text-sky-400" },
+  scene: { label: "Scène", icon: Layers, className: "bg-teal-50 dark:bg-teal-500/10 text-teal-500 dark:text-teal-400" },
 };
 const DEFAULT_TYPE_META = { label: "Page", icon: FileText, className: "bg-blue-50 dark:bg-blue-500/10 text-blue-500 dark:text-blue-400" };
 

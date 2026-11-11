@@ -233,6 +233,22 @@ describe("synchronisation Firestore (textes stockés séparément)", () => {
     expect(fake.state.docs.has(contentPath("p-1"))).toBe(false);
   });
 
+  it("garde le texte d'une scène en corbeille et la remet dans son chapitre", async () => {
+    fake.state.docs.set("users/u1", structure([{ id: "p-1", title: "Un", scenes: [{ id: "s-1", title: "Scène" }] }]));
+    fake.state.docs.set(contentPath("s-1"), { content: "texte de scène" });
+    await signIn();
+
+    await act(async () => logic.deleteScene("p-1", "s-1"));
+    await wait(SAVE_DELAY);
+    expect(pageOf("p-1").scenes).toEqual([]);
+    expect(logic.trashItems[0]).toMatchObject({ originalType: "scene", pageId: "p-1", content: "texte de scène" });
+    expect(fake.state.docs.get(contentPath("s-1"))).toEqual({ content: "texte de scène" });
+
+    await act(async () => logic.handleRestore(logic.trashItems[0]));
+    expect(pageOf("p-1").scenes.map((s) => [s.id, s.content])).toEqual([["s-1", "texte de scène"]]);
+    expect(logic.trashItems).toEqual([]);
+  });
+
   it("applique un texte modifié sur un autre appareil sans rien réécrire", async () => {
     fake.state.docs.set("users/u1", structure([{ id: "p-1", title: "Un" }]));
     fake.state.docs.set(contentPath("p-1"), { content: "un" });
