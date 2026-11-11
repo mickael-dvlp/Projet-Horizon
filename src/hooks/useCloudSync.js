@@ -73,6 +73,9 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [storageUsage, setStorageUsage] = useState(null);
+  // Premier chargement d'un compte en attente du serveur (hors-ligne sur un
+  // appareil où ses données n'ont jamais été téléchargées).
+  const [awaitingServer, setAwaitingServer] = useState(false);
 
   // Sauvegarde en attente (debounce) : données, empreinte et destination
   // (compte ou invité) figées au moment du changement, pour pouvoir être
@@ -259,17 +262,78 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     let isFirst = true;
     let mainSnap = null;
     let contents = null;
+    // Écoutes temporaires de waitForServer, fermées au premier chargement.
+    let probes = [];
+
+    const stopProbes = () => {
+      probes.forEach((unsubscribe) => unsubscribe());
+      probes = [];
+    };
+
+    const toContents = (snap) => Object.fromEntries(snap.docs.map((d) => [d.id, d.data().content]));
 
     const finishFirstLoad = (loadFn) => {
       isFirst = false;
+      stopProbes();
+      setAwaitingServer(false);
       loadFn();
       setIsInitialLoad(false);
       setLoading(false);
     };
 
+    // Les écoutes principales ne sont pas notifiées d'une réponse du serveur
+    // qui ne change rien aux données (document toujours absent) : deux
+    // écoutes temporaires, notifiées aussi des changements de métadonnées,
+    // guettent la première réponse du serveur pour le document et les textes.
+    const waitForServer = () => {
+      setAwaitingServer(true);
+      let serverMain = null;
+      let serverContents = null;
+      const onServerAnswer = () => {
+        if (!serverMain || !serverContents) return;
+        stopProbes();
+        mainSnap = serverMain;
+        contents = serverContents;
+        apply();
+      };
+      probes = [
+        onSnapshot(
+          userDoc(uid),
+          { includeMetadataChanges: true },
+          (snap) => {
+            if (snap.metadata.fromCache) return;
+            serverMain = snap;
+            onServerAnswer();
+          },
+          onError
+        ),
+        onSnapshot(
+          collection(db, "users", uid, "contents"),
+          { includeMetadataChanges: true },
+          (snap) => {
+            if (snap.metadata.fromCache) return;
+            serverContents = toContents(snap);
+            onServerAnswer();
+          },
+          onError
+        ),
+      ];
+    };
+
     const apply = () => {
       if (!mainSnap || !contents) return;
       if (isFirst) {
+        // Réponse du serveur attendue : c'est elle qui termine le chargement.
+        if (probes.length > 0) return;
+        // Document absent du cache local, et serveur pas encore joint
+        // (hors-ligne sur un appareil jamais synchronisé) : impossible de
+        // savoir si le compte a des données. Les charger « vides » laisserait
+        // créer un univers dont la sauvegarde écraserait tout le document
+        // distant au retour de la connexion : on attend le serveur.
+        if (!mainSnap.exists() && mainSnap.metadata.fromCache) {
+          waitForServer();
+          return;
+        }
         finishFirstLoad(() =>
           mainSnap.exists()
             ? loadFromFirestore(mainSnap.data(), contents, { isRemote: false })
@@ -310,7 +374,7 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     const unsubContents = onSnapshot(
       collection(db, "users", uid, "contents"),
       (snap) => {
-        contents = Object.fromEntries(snap.docs.map((d) => [d.id, d.data().content]));
+        contents = toContents(snap);
         if (!isFirst && snap.metadata.hasPendingWrites) return;
         apply();
       },
@@ -319,6 +383,7 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     return () => {
       unsubMain();
       unsubContents();
+      stopProbes();
     };
   };
 
@@ -577,6 +642,7 @@ export function useCloudSync({ data, lastActive, applyData, resetData, showToast
     isAuthModalOpen,
     setIsAuthModalOpen,
     storageUsage,
+    awaitingServer,
     flushSave,
     cancelPendingSave,
     markUnsynced,

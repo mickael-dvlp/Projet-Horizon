@@ -6,25 +6,29 @@ import { createRoot } from "react-dom/client";
 // Simule ce dont la synchronisation dépend : documents, écoutes temps réel
 // (premier instantané, puis instantanés locaux "en attente" après nos propres
 // écritures, et instantanés serveur pour les changements d'un autre
-// appareil), écritures groupées.
+// appareil), écritures groupées, et mode hors-ligne d'un appareil jamais
+// synchronisé (instantanés "du cache", vides).
 const fake = vi.hoisted(() => {
   const state = {
     docs: new Map(),
     listeners: new Set(),
     log: [],
     authCallback: null,
+    online: true,
   };
 
   const snapshotFor = (ref, pending) => {
+    const source = state.online ? state.docs : new Map();
+    const metadata = { hasPendingWrites: pending, fromCache: !state.online };
     if (ref.isCollection) {
       const prefix = `${ref.path}/`;
-      const docs = [...state.docs]
+      const docs = [...source]
         .filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes("/"))
         .map(([path, data]) => ({ id: path.slice(prefix.length), data: () => data }));
-      return { docs, metadata: { hasPendingWrites: pending } };
+      return { docs, metadata };
     }
-    const data = state.docs.get(ref.path);
-    return { exists: () => data !== undefined, data: () => data, metadata: { hasPendingWrites: pending } };
+    const data = source.get(ref.path);
+    return { exists: () => data !== undefined, data: () => data, metadata };
   };
 
   const resultKey = (snapshot) =>
@@ -32,13 +36,18 @@ const fake = vi.hoisted(() => {
       ? JSON.stringify(snapshot.docs.map((d) => [d.id, d.data()]).sort())
       : JSON.stringify(snapshot.exists() ? snapshot.data() : "<absent>");
 
-  // Comme le vrai SDK (sans includeMetadataChanges) : une écoute n'est
-  // notifiée que si SES résultats ont changé.
+  const metadataKey = (snapshot) => `${snapshot.metadata.fromCache}|${snapshot.metadata.hasPendingWrites}`;
+
+  // Comme le vrai SDK : une écoute n'est notifiée que si SES résultats ont
+  // changé — ou, avec includeMetadataChanges, leurs métadonnées.
   const deliver = (listener, pending) => {
     const snapshot = snapshotFor(listener.ref, pending);
     const key = resultKey(snapshot);
-    if (key === listener.lastKey) return;
+    const meta = metadataKey(snapshot);
+    const metadataChanged = listener.includeMetadataChanges && meta !== listener.lastMeta;
+    if (key === listener.lastKey && !metadataChanged) return;
     listener.lastKey = key;
+    listener.lastMeta = meta;
     listener.onNext(snapshot);
   };
 
@@ -49,8 +58,15 @@ const fake = vi.hoisted(() => {
   const firestore = {
     doc: (_db, ...segments) => ({ path: segments.join("/"), isCollection: false }),
     collection: (_db, ...segments) => ({ path: segments.join("/"), isCollection: true }),
-    onSnapshot: (ref, onNext) => {
-      const listener = { ref, onNext, lastKey: undefined };
+    onSnapshot: (ref, ...args) => {
+      const options = typeof args[0] === "object" ? args.shift() : {};
+      const listener = {
+        ref,
+        onNext: args[0],
+        includeMetadataChanges: !!options.includeMetadataChanges,
+        lastKey: undefined,
+        lastMeta: undefined,
+      };
       state.listeners.add(listener);
       queueMicrotask(() => deliver(listener, false));
       return () => state.listeners.delete(listener);
@@ -85,7 +101,14 @@ const fake = vi.hoisted(() => {
     notify(false);
   };
 
-  return { state, firestore, remoteWrite };
+  // Retour (ou perte) de la connexion : les écoutes reçoivent l'état du
+  // serveur (ou du cache vide).
+  const setOnline = (online) => {
+    state.online = online;
+    notify(false);
+  };
+
+  return { state, firestore, remoteWrite, setOnline };
 });
 
 vi.mock("@/firebase/config", () => ({ auth: {}, db: {}, googleProvider: {} }));
@@ -143,6 +166,7 @@ beforeEach(async () => {
   fake.state.docs.clear();
   fake.state.listeners.clear();
   fake.state.log.length = 0;
+  fake.state.online = true;
   localStorage.clear();
   container = document.createElement("div");
   root = createRoot(container);
@@ -273,5 +297,37 @@ describe("synchronisation Firestore (textes stockés séparément)", () => {
 
     expect(pageOf("p-1").content).toBe("local");
     expect(fake.state.docs.get(contentPath("p-1"))).toEqual({ content: "local" });
+  });
+
+  it("hors-ligne sur un appareil jamais synchronisé, attend le serveur au lieu d'ouvrir un compte vide", async () => {
+    fake.state.docs.set("users/u1", structure([{ id: "p-1", title: "Un" }]));
+    fake.state.docs.set(contentPath("p-1"), { content: "un" });
+    fake.state.online = false;
+    await signIn();
+    expect(logic.awaitingServer).toBe(true);
+    expect(logic.loading).toBe(true);
+
+    await wait(SAVE_DELAY);
+    expect(fake.state.log).toEqual([]);
+
+    await act(async () => fake.setOnline(true));
+    expect(logic.awaitingServer).toBe(false);
+    expect(logic.loading).toBe(false);
+    expect(pageOf("p-1").content).toBe("un");
+    await wait(SAVE_DELAY);
+    expect(fake.state.log).toEqual([]);
+  });
+
+  it("hors-ligne, un nouveau compte s'ouvre une fois l'absence de données confirmée par le serveur", async () => {
+    fake.state.online = false;
+    await signIn();
+    expect(logic.awaitingServer).toBe(true);
+
+    // Le serveur confirme l'absence de document : seules les métadonnées
+    // changent, les écoutes principales ne sont pas notifiées.
+    await act(async () => fake.setOnline(true));
+    expect(logic.awaitingServer).toBe(false);
+    expect(logic.loading).toBe(false);
+    expect(logic.projects).toEqual([]);
   });
 });

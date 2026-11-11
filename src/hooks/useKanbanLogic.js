@@ -635,6 +635,7 @@ export function useKanbanLogic({ confirm }) {
     user: sync.user,
     isGuest: sync.isGuest,
     loading: sync.loading,
+    awaitingServer: sync.awaitingServer,
     isAuthModalOpen: sync.isAuthModalOpen,
     setIsAuthModalOpen: sync.setIsAuthModalOpen,
     handleGuestLogin: sync.handleGuestLogin,
